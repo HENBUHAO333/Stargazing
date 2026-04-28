@@ -15,10 +15,10 @@ load_dotenv()
 # ENV KEYS
 # ============================================================
 
-TAD_ACCESS_KEY = os.getenv("ASTRO_ACCESS_KEY")
-TAD_SECRET_KEY = os.getenv("ASTRO_SECRET_KEY")
-IPGEOLOC_API_KEY = os.getenv("IPGEOLOC_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+TAD_ACCESS_KEY = get_secret("ASTRO_ACCESS_KEY")
+TAD_SECRET_KEY = get_secret("ASTRO_SECRET_KEY")
+IPGEOLOC_API_KEY = get_secret("IPGEOLOC_API_KEY")
+OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
 
 
 # ============================================================

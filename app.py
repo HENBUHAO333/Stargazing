@@ -309,7 +309,7 @@ days = st.sidebar.slider(
 )
 
 bortle_index = st.sidebar.slider(
-    "Bortle light pollution index",
+    "City lights index",
     min_value=1,
     max_value=9,
     value=5,

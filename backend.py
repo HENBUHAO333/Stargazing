@@ -10,15 +10,32 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
 # ============================================================
-# ENV KEYS
+# STREAMLIT CLOUD + LOCAL SECRET LOADER
 # ============================================================
 
-TAD_ACCESS_KEY = get_secret("ASTRO_ACCESS_KEY")
-TAD_SECRET_KEY = get_secret("ASTRO_SECRET_KEY")
-IPGEOLOC_API_KEY = get_secret("IPGEOLOC_API_KEY")
-OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
+try:
+    import streamlit as st
+except Exception:
+    st = None
+
+
+def get_secret(name):
+    """
+    Read secrets from local .env first, then Streamlit Cloud secrets.
+    """
+    value = os.getenv(name)
+    if value:
+        return value
+
+    if st is not None:
+        try:
+            return st.secrets.get(name)
+        except Exception:
+            return None
+
+    return None
+
 
 
 # ============================================================

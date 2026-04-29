@@ -332,7 +332,7 @@ st.markdown(
         color: var(--text);
         line-height: 1.15;
     }
-    .hero-title em { font-style: italic; }
+
     .hero-desc {
         margin: 0;
         font-family: 'DM Sans', sans-serif;
@@ -915,7 +915,7 @@ if not run_button:
                 <div class="hero-left">
                     <div class="hero-icon-wrap">🚀</div>
                     <div>
-                        <h1 class="hero-title">Stargazing <em>Assistant</em></h1>
+                        <h1 class="hero-title">Stargazing Assistant</h1>
                         <p class="hero-desc">
                             A live decision-support tool for finding the best stargazing windows
                             using weather, astronomy, light pollution, scoring logic, and optional
@@ -1044,7 +1044,7 @@ st.markdown(
             <div class="hero-left">
                 <div class="hero-icon-wrap">🚀</div>
                 <div>
-                    <h1 class="hero-title">Stargazing <em>Assistant</em></h1>
+                    <h1 class="hero-title">Stargazing Assistant</h1>
                     <p class="hero-desc">
                         A live decision-support tool for finding the best stargazing windows
                         using weather, astronomy, light pollution, scoring logic, and optional

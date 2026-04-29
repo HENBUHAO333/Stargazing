@@ -5,16 +5,19 @@ secondaryBackgroundColor = "#100d1e"
 textColor                = "#e4dff0"
 
 [[theme.fontFaces]]
-fontFamily = "DM Serif Display"
-src        = "url(./static/DMSerifDisplay-Regular.ttf)"
+family = "DM Serif Display"
+url    = "./static/DMSerifDisplay-Regular.ttf"
+style  = "normal"
 
 [[theme.fontFaces]]
-fontFamily = "DM Serif Display"
-src        = "url(./static/DMSerifDisplay-Italic.ttf)"
+family = "DM Serif Display"
+url    = "./static/DMSerifDisplay-Italic.ttf"
+style  = "italic"
 
 [[theme.fontFaces]]
-fontFamily = "DM Sans"
-src        = "url(./static/DMSans.ttf)"
+family      = "DM Sans"
+url         = "./static/DMSans.ttf"
+weightRange = "100 900"
 
 [server]
 enableStaticServing = true

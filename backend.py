@@ -1191,6 +1191,8 @@ def get_top_windows(score_df: pd.DataFrame, n: int = 10) -> pd.DataFrame:
         "date",
         "stargazing_score",
         "recommendation",
+        "cluster_label",
+        "cluster_description",
         "cloud_value",
         "transparency_value",
         "seeing_value",
@@ -1260,6 +1262,97 @@ def build_daily_summary(score_df: pd.DataFrame) -> pd.DataFrame:
     )
 
     return daily
+
+
+def cluster_windows(score_df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
+    """
+    K-means clustering on sky-condition features.
+    Adds cluster_label and cluster_description columns.
+    Does not modify stargazing_score.
+    """
+    from scipy.cluster.vq import kmeans2, whiten
+
+    FEATURE_COLS = [
+        "cloud_value",
+        "transparency_norm",
+        "seeing_norm",
+        "effective_darkness",
+        "moon_brightness_penalty",
+    ]
+
+    out = score_df.copy()
+
+    missing = [c for c in FEATURE_COLS if c not in out.columns]
+    if missing or len(out) < k:
+        out["cluster_label"] = "Unknown"
+        out["cluster_description"] = "Insufficient data to cluster."
+        return out
+
+    X = out[FEATURE_COLS].fillna(out[FEATURE_COLS].median()).values.astype(float)
+
+    try:
+        # whiten = divide each feature column by its std (equivalent to StandardScaler)
+        X_w = whiten(X)
+        _, labels = kmeans2(X_w, k, seed=42, minit="points")
+    except Exception:
+        out["cluster_label"] = "Unknown"
+        out["cluster_description"] = "Clustering unavailable for this forecast."
+        return out
+
+    out["_cluster_id"] = labels
+
+    # Compute centroid profiles in original (unwhitened) feature space
+    centroids_orig = out.groupby("_cluster_id")[FEATURE_COLS].mean()
+
+    def _name(row):
+        cloud = row["cloud_value"]
+        dark  = row["effective_darkness"]
+        moon  = row["moon_brightness_penalty"]
+        trans = row["transparency_norm"]
+        see   = row["seeing_norm"]
+
+        if cloud > 70:
+            return "Overcast", (
+                "Heavy cloud cover is the main obstacle — "
+                "most deep-sky objects will be hidden."
+            )
+        if cloud > 45:
+            return "Cloudy but Dark", (
+                "The sky is dark enough, but cloud cover is the main limiting factor."
+            )
+        if dark < 0.28:
+            return "Twilight", (
+                "It's not astronomically dark yet — "
+                "the sky background is too bright for faint objects."
+            )
+        if moon > 0.38:
+            return "Moonlit", (
+                "The moon is bright and above the horizon — "
+                "it will wash out nebulae and faint galaxies."
+            )
+        if trans < 0.35:
+            return "Hazy", (
+                "Atmospheric haze is reducing sky transparency; "
+                "only bright objects will be clearly visible."
+            )
+        if see < 0.35:
+            return "Turbulent", (
+                "Atmospheric turbulence makes star images unsteady — "
+                "poor conditions for planetary or lunar detail."
+            )
+        return "Clear & Dark", (
+            "Sky conditions are favorable — "
+            "dark background with solid atmospheric clarity."
+        )
+
+    cluster_map = {
+        cid: _name(row) for cid, row in centroids_orig.iterrows()
+    }
+
+    out["cluster_label"]       = out["_cluster_id"].map(lambda i: cluster_map[i][0])
+    out["cluster_description"] = out["_cluster_id"].map(lambda i: cluster_map[i][1])
+    out = out.drop(columns=["_cluster_id"])
+    return out
 
 
 def build_llm_context(
@@ -1410,6 +1503,8 @@ def run_pipeline(
         master_df=master_df,
         bortle_index=bortle_index,
     )
+
+    score_df = cluster_windows(score_df)
 
     top_windows = get_top_windows(score_df, n=10)
     daily_summary = build_daily_summary(score_df)

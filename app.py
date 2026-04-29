@@ -1062,9 +1062,13 @@ st.markdown(
 )
 
 render_source_badges(result)
-st.caption(
-    "Score is generated only from the weather/astronomy scoring pipeline. "
-    "Sun/Moon position data and AI recommendation do not change the score."
+st.markdown(
+    '<p style="font-family:\'DM Sans\',sans-serif;font-size:13px;color:#c478d2;'
+    'background:rgba(196,120,210,0.08);border:1px solid rgba(196,120,210,0.22);'
+    'border-radius:8px;padding:8px 14px;margin:6px 0 0 0;display:inline-block;">'
+    "&#9432;&nbsp; Score is generated only from the weather/astronomy scoring pipeline. "
+    "Sun/Moon position data and AI recommendation do not change the score.</p>",
+    unsafe_allow_html=True,
 )
 st.success(
     f"Live data loaded for {result.get('city_name', city_name)} "

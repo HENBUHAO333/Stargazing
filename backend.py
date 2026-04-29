@@ -1,7 +1,10 @@
 import os
 import json
+import warnings
+import math
 from datetime import datetime, timedelta
 from typing import Dict, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -336,18 +339,45 @@ def fetch_ipgeo_astronomy(
 
     url = "https://api.ipgeolocation.io/v3/astronomy/timeSeries"
 
-    params = {
-        "apiKey": IPGEOLOC_API_KEY,
-        "location": f"{lat},{lon}",
-        "dateStart": start_date.strftime("%Y-%m-%d"),
-        "dateEnd": end_date.strftime("%Y-%m-%d"),
-    }
+    def request_timeseries(start_dt: datetime, end_dt: datetime) -> list:
+        params = {
+            "apiKey": IPGEOLOC_API_KEY,
+            "location": f"{lat},{lon}",
+            "dateStart": start_dt.strftime("%Y-%m-%d"),
+            "dateEnd": end_dt.strftime("%Y-%m-%d"),
+        }
+        resp = requests.get(url, params=params, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        return data.get("astronomy", [])
 
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
+    try:
+        astronomy_data = request_timeseries(start_date, end_date)
+    except requests.HTTPError as e:
+        status = e.response.status_code if e.response is not None else None
 
-    data = resp.json()
-    astronomy_data = data.get("astronomy", [])
+        # Some plans/locations reject multi-day timeSeries ranges with HTTP 400.
+        # Retry as one-day windows to maximize successful coverage.
+        if status == 400 and days > 1:
+            astronomy_data = []
+            for i in range(days):
+                one_day = start_date + timedelta(days=i)
+                try:
+                    astronomy_data.extend(request_timeseries(one_day, one_day))
+                except requests.HTTPError as day_err:
+                    day_status = (
+                        day_err.response.status_code
+                        if day_err.response is not None
+                        else None
+                    )
+                    if day_status != 400:
+                        raise
+            if not astronomy_data:
+                raise ValueError(
+                    "IPGeolocation returned no astronomy data for requested dates."
+                ) from e
+        else:
+            raise
 
     if not astronomy_data:
         raise ValueError("IPGeolocation returned no astronomy data.")
@@ -413,7 +443,7 @@ def fetch_astronomy_with_fallback(
             return ip_geo_df, "IPGeolocation"
 
     except Exception as e:
-        print(f"IPGeolocation astronomy failed. Using fallback astronomy. Error: {e}")
+        print(f"IPGeolocation astronomy fallback active: {e}")
 
     fallback_df = build_fallback_astronomy_df(
         start_date=start_date,
@@ -595,9 +625,61 @@ def fetch_tad_positions(
     lat: float,
     lon: float,
     start_date: Optional[datetime] = None,
+    timezone: str = "UTC",
+    days: int = 2,
 ) -> pd.DataFrame:
+    def _estimated_position_fallback() -> pd.DataFrame:
+        tz = ZoneInfo(timezone) if timezone else ZoneInfo("UTC")
+        now_local = datetime.now(tz)
+        anchor = start_date or now_local
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=tz)
+        else:
+            anchor = anchor.astimezone(tz)
+
+        lat_factor = max(0.35, math.cos(math.radians(abs(lat))))
+        rows = []
+        for day_offset in range(max(int(days), 1)):
+            d = (anchor + timedelta(days=day_offset)).date()
+            for hour in range(24):
+                dt_local = datetime(d.year, d.month, d.day, hour, 0, 0, tzinfo=tz)
+                dt_utc = dt_local.astimezone(ZoneInfo("UTC"))
+
+                sun_phase = 2 * math.pi * ((hour - 12) / 24.0)
+                sun_alt = 65 * math.sin(sun_phase) * lat_factor
+                sun_az = (hour / 24.0 * 360.0 + 180.0) % 360.0
+
+                moon_hour = (hour + 6) % 24
+                moon_phase = 2 * math.pi * ((moon_hour - 12) / 24.0)
+                moon_alt = 55 * math.sin(moon_phase) * lat_factor
+                moon_az = ((hour + 6) / 24.0 * 360.0 + 120.0) % 360.0
+
+                rows.append(
+                    {
+                        "Object": "Sun",
+                        "UTC Time": dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Hour": hour,
+                        "Altitude (°)": round(float(sun_alt), 2),
+                        "Azimuth (°)": round(float(sun_az), 2),
+                        "Data Source": "Estimated fallback",
+                    }
+                )
+                rows.append(
+                    {
+                        "Object": "Moon",
+                        "UTC Time": dt_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                        "Hour": hour,
+                        "Altitude (°)": round(float(moon_alt), 2),
+                        "Azimuth (°)": round(float(moon_az), 2),
+                        "Moon Phase": "Estimated",
+                        "Data Source": "Estimated fallback",
+                    }
+                )
+
+        return pd.DataFrame(rows)
+
     if not TAD_ACCESS_KEY or not TAD_SECRET_KEY:
-        raise ValueError("Missing ASTRO_ACCESS_KEY or ASTRO_SECRET_KEY in .env")
+        return _estimated_position_fallback()
 
     lib = _load_libtad()
 
@@ -618,10 +700,15 @@ def fetch_tad_positions(
     service.include_isotime = False
     service.is_localtime = False
 
-    intervals = [
-        TADDateTime(start_date.year, start_date.month, start_date.day, hour, 0, 0)
-        for hour in range(24)
-    ]
+    intervals = []
+    for day_offset in range(max(int(days), 1)):
+        day_ref = start_date + timedelta(days=day_offset)
+        intervals.extend(
+            [
+                TADDateTime(day_ref.year, day_ref.month, day_ref.day, hour, 0, 0)
+                for hour in range(24)
+            ]
+        )
 
     def fetch_one(object_type, label: str) -> list:
         locations = service.get_astrodata(object_type, place, intervals)
@@ -670,7 +757,22 @@ def fetch_tad_positions(
     sun_rows = fetch_one(AstronomyObjectType.Sun, "Sun")
     moon_rows = fetch_one(AstronomyObjectType.Moon, "Moon")
 
-    return pd.DataFrame(sun_rows + moon_rows)
+    out = pd.DataFrame(sun_rows + moon_rows)
+
+    if out.empty:
+        return _estimated_position_fallback()
+
+    # Keep only rows that actually contain usable sky-path coordinates.
+    for c in ["Altitude (°)", "Azimuth (°)"]:
+        if c not in out.columns:
+            out[c] = np.nan
+
+    out = out.dropna(subset=["Altitude (°)", "Azimuth (°)"], how="all")
+
+    out = out.reset_index(drop=True)
+    if out.empty:
+        return _estimated_position_fallback()
+    return out
 
 
 # ============================================================
@@ -1273,7 +1375,7 @@ def cluster_windows(score_df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
     Adds cluster_label and cluster_description columns.
     Does not modify stargazing_score.
     """
-    from scipy.cluster.vq import kmeans2, whiten
+    from scipy.cluster.vq import kmeans2
 
     FEATURE_COLS = [
         "cloud_value",
@@ -1294,9 +1396,26 @@ def cluster_windows(score_df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
     X = out[FEATURE_COLS].fillna(out[FEATURE_COLS].median()).values.astype(float)
 
     try:
-        # whiten = divide each feature column by its std (equivalent to StandardScaler)
-        X_w = whiten(X)
-        _, labels = kmeans2(X_w, k, seed=42, minit="points")
+        # Avoid scipy whiten warnings when one feature has zero variance.
+        std = X.std(axis=0)
+        safe_std = np.where(std == 0, 1.0, std)
+        X_w = X / safe_std
+
+        unique_count = len(np.unique(np.round(X_w, 6), axis=0))
+        k_eff = min(k, unique_count, len(out))
+
+        if k_eff < 2:
+            out["cluster_label"] = "Unknown"
+            out["cluster_description"] = "Insufficient feature diversity to cluster."
+            return out
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="One of the clusters is empty.*",
+                category=UserWarning,
+            )
+            _, labels = kmeans2(X_w, k_eff, seed=42, minit="++")
     except Exception:
         out["cluster_label"] = "Unknown"
         out["cluster_description"] = "Clustering unavailable for this forecast."
@@ -1762,6 +1881,97 @@ def generate_rag_recommendation(context: Dict, user_question: str = "") -> str:
 
 
 # ============================================================
+# TELEMETRY HELPERS
+# ============================================================
+
+def _telemetry_log(logs: list, message: str):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    logs.append(f"[{timestamp}] {message}")
+
+
+def _safe_preview_df(df: pd.DataFrame, max_rows: int = 5) -> list:
+    if df is None or df.empty:
+        return []
+    return df.head(max_rows).to_dict(orient="records")
+
+
+def _build_telemetry_report(
+    logs: list,
+    weather_df: pd.DataFrame,
+    ip_geo_df: pd.DataFrame,
+    event_df: pd.DataFrame,
+    position_df: pd.DataFrame,
+    master_df: pd.DataFrame,
+    score_df: pd.DataFrame,
+    top_windows: pd.DataFrame,
+    weather_source: str,
+    astronomy_source: str,
+    bortle_index: float,
+) -> Dict:
+    recommendation_counts = {}
+    cluster_counts = {}
+
+    if score_df is not None and not score_df.empty:
+        if "recommendation" in score_df.columns:
+            recommendation_counts = (
+                score_df["recommendation"].value_counts().to_dict()
+            )
+        if "cluster_label" in score_df.columns:
+            cluster_counts = score_df["cluster_label"].value_counts().to_dict()
+
+    return {
+        "logs": logs,
+        "pipeline": {
+            "weather_source": weather_source,
+            "astronomy_source": astronomy_source,
+            "bortle_index": float(bortle_index),
+            "rows": {
+                "weather_df": int(len(weather_df)) if weather_df is not None else 0,
+                "ip_geo_df": int(len(ip_geo_df)) if ip_geo_df is not None else 0,
+                "event_df": int(len(event_df)) if event_df is not None else 0,
+                "position_df": int(len(position_df)) if position_df is not None else 0,
+                "master_df": int(len(master_df)) if master_df is not None else 0,
+                "score_df": int(len(score_df)) if score_df is not None else 0,
+                "top_windows": int(len(top_windows)) if top_windows is not None else 0,
+            },
+            "recommendation_counts": recommendation_counts,
+            "cluster_counts": cluster_counts,
+        },
+        "scoring_model": {
+            "visibility_penalty": {
+                "cloud_ge_80": 0.05,
+                "cloud_ge_60": 0.25,
+                "cloud_ge_40": 0.55,
+                "daylight_multiplier_if_not_dark": 0.05,
+            },
+            "atmospheric_weights": {
+                "transparency_norm": 0.45,
+                "seeing_norm": 0.35,
+                "humidity_quality": 0.20,
+            },
+            "final_weights": {
+                "atmospheric_score": 0.65,
+                "effective_darkness": 0.35,
+            },
+            "recommendation_thresholds": {
+                "excellent": ">= 85",
+                "good": ">= 70",
+                "marginal": ">= 50",
+                "poor": ">= 25",
+                "no_go": "< 25",
+            },
+        },
+        "api_preview": {
+            "weather_preview": _safe_preview_df(weather_df, max_rows=5),
+            "astronomy_preview": _safe_preview_df(ip_geo_df, max_rows=5),
+            "event_preview": _safe_preview_df(event_df, max_rows=5),
+            "position_preview": _safe_preview_df(position_df, max_rows=5),
+            "top_windows_preview": _safe_preview_df(top_windows, max_rows=5),
+        },
+    }
+
+
+# ============================================================
 # MAIN PIPELINE
 # ============================================================
 
@@ -1776,32 +1986,54 @@ def run_pipeline(
     include_positions: bool = False,
     include_llm: bool = False,
 ) -> Dict:
+    telemetry_logs = []
+    _telemetry_log(telemetry_logs, "Pipeline started.")
+
     if lat is None or lon is None:
         lat, lon, inferred_tz = get_city_coordinates(city_name)
         timezone = timezone or inferred_tz
+        _telemetry_log(
+            telemetry_logs,
+            f"Resolved coordinates from city preset: lat={lat:.4f}, lon={lon:.4f}, tz={timezone}.",
+        )
     else:
         timezone = timezone or "UTC"
+        _telemetry_log(
+            telemetry_logs,
+            f"Using custom coordinates: lat={lat:.4f}, lon={lon:.4f}, tz={timezone}.",
+        )
 
     start_date = datetime.now()
 
+    _telemetry_log(telemetry_logs, "Fetching weather forecast.")
     weather_df, weather_source = fetch_weather_forecast_with_fallback(
         lat=lat,
         lon=lon,
         timezone=timezone,
         days=days,
     )
+    _telemetry_log(
+        telemetry_logs,
+        f"Weather fetch completed via {weather_source}. rows={len(weather_df)}.",
+    )
 
+    _telemetry_log(telemetry_logs, "Fetching astronomy forecast.")
     ip_geo_df, astronomy_source = fetch_astronomy_with_fallback(
         lat=lat,
         lon=lon,
         start_date=start_date,
         days=days,
     )
+    _telemetry_log(
+        telemetry_logs,
+        f"Astronomy fetch completed via {astronomy_source}. rows={len(ip_geo_df)}.",
+    )
 
     event_df = pd.DataFrame()
     position_df = pd.DataFrame()
 
     if include_tad:
+        _telemetry_log(telemetry_logs, "Fetching Timeanddate event dataset.")
         try:
             event_df = fetch_tad_events(
                 lat=lat,
@@ -1810,37 +2042,64 @@ def run_pipeline(
                 start_date=start_date,
                 days=days,
             )
+            _telemetry_log(
+                telemetry_logs,
+                f"Timeanddate event fetch completed. rows={len(event_df)}.",
+            )
         except Exception as e:
             print(f"Timeanddate events failed. Continuing without events. Error: {e}")
+            _telemetry_log(
+                telemetry_logs,
+                f"Timeanddate event fetch failed. Falling back to empty dataset. error={e}",
+            )
             event_df = pd.DataFrame()
 
     if include_positions:
+        _telemetry_log(telemetry_logs, "Fetching Timeanddate position dataset.")
         try:
             position_df = fetch_tad_positions(
                 lat=lat,
                 lon=lon,
                 start_date=start_date,
             )
+            _telemetry_log(
+                telemetry_logs,
+                f"Timeanddate position fetch completed. rows={len(position_df)}.",
+            )
         except Exception as e:
             print(f"Timeanddate positions failed. Continuing without positions. Error: {e}")
+            _telemetry_log(
+                telemetry_logs,
+                f"Timeanddate position fetch failed. Falling back to empty dataset. error={e}",
+            )
             position_df = pd.DataFrame()
 
+    _telemetry_log(telemetry_logs, "Building master dataframe.")
     master_df = build_master_df(
         weather_df=weather_df,
         ip_geo_df=ip_geo_df,
         event_df=event_df,
         timezone=timezone,
     )
+    _telemetry_log(telemetry_logs, f"Master dataframe ready. rows={len(master_df)}.")
 
+    _telemetry_log(telemetry_logs, "Running deterministic scoring model.")
     score_df = score_stargazing_windows(
         master_df=master_df,
         bortle_index=bortle_index,
     )
+    _telemetry_log(telemetry_logs, f"Scoring completed. rows={len(score_df)}.")
 
+    _telemetry_log(telemetry_logs, "Running K-means clustering labels.")
     score_df = cluster_windows(score_df)
+    _telemetry_log(telemetry_logs, "Clustering labels computed.")
 
     top_windows = get_top_windows(score_df, n=10)
     daily_summary = build_daily_summary(score_df)
+    _telemetry_log(
+        telemetry_logs,
+        f"Summary objects ready. top_windows={len(top_windows)}, daily_summary={len(daily_summary)}.",
+    )
 
     llm_context = build_llm_context(
         city_name=city_name,
@@ -1857,6 +2116,22 @@ def run_pipeline(
 
     if include_llm:
         llm_text = generate_llm_recommendation(llm_context)
+        _telemetry_log(telemetry_logs, "LLM recommendation generated.")
+
+    telemetry = _build_telemetry_report(
+        logs=telemetry_logs,
+        weather_df=weather_df,
+        ip_geo_df=ip_geo_df,
+        event_df=event_df,
+        position_df=position_df,
+        master_df=master_df,
+        score_df=score_df,
+        top_windows=top_windows,
+        weather_source=weather_source,
+        astronomy_source=astronomy_source,
+        bortle_index=bortle_index,
+    )
+    _telemetry_log(telemetry_logs, "Pipeline completed.")
 
     return {
         "city_name": city_name,
@@ -1875,6 +2150,7 @@ def run_pipeline(
         "top_windows": top_windows,
         "llm_context": llm_context,
         "llm_text": llm_text,
+        "telemetry": telemetry,
     }
 
 

@@ -92,10 +92,25 @@ st.markdown(
         letter-spacing: -0.01em;
     }
 
-    p, li, span, label, td, th,
+    p, li, label, td, th,
     button, input, select, textarea,
     [data-testid="stMarkdownContainer"] p {
         font-family: 'DM Sans', system-ui, sans-serif !important;
+    }
+
+    /* Keep Streamlit/Material icons from rendering as raw text names. */
+    .material-icons,
+    .material-symbols-rounded,
+    .material-symbols-outlined,
+    [class^="material-symbols-"],
+    [class*=" material-symbols-"] {
+        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        white-space: nowrap !important;
+        direction: ltr !important;
     }
 
     /* Subheader override */
@@ -121,12 +136,24 @@ st.markdown(
         background: transparent !important;
     }
     [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] div {
+    [data-testid="stSidebar"] p {
         color: var(--text) !important;
         font-family: 'DM Sans', system-ui, sans-serif !important;
         font-size: 13px !important;
+    }
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: var(--text) !important;
+    }
+    [data-testid="stSidebarCollapseButton"] span,
+    [data-testid="collapsedControl"] span,
+    button[aria-label*="sidebar" i] span {
+        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        font-size: 20px !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
     }
     [data-testid="stSidebar"] .stMarkdown p {
         color: var(--text-muted) !important;
@@ -976,6 +1003,39 @@ def safe_numeric(value, default=None):
         return default
 
 
+def render_scoring_feature_table(table_df: pd.DataFrame, max_rows: int = 60):
+    preferred_cols = [
+        "local_dt",
+        "stargazing_score",
+        "recommendation",
+        "cloud_value",
+        "transparency_value",
+        "seeing_value",
+        "visibility_penalty",
+        "transparency_norm",
+        "seeing_norm",
+        "humidity_quality",
+        "moon_brightness_penalty",
+        "effective_darkness",
+        "atmospheric_score",
+    ]
+
+    if table_df is None or table_df.empty:
+        st.info("Scoring Feature Table is empty for the current pipeline run.")
+        return
+
+    diagnostic_cols = [c for c in preferred_cols if c in table_df.columns]
+    if not diagnostic_cols:
+        st.warning(
+            "Diagnostic columns were not found in the scored dataframe. "
+            "Showing the first available columns instead."
+        )
+        st.dataframe(table_df.head(max_rows), use_container_width=True)
+        return
+
+    st.dataframe(table_df[diagnostic_cols].head(max_rows), use_container_width=True)
+
+
 def badge_class(label):
     label = str(label).lower()
     if label == "excellent": return "badge-excellent"
@@ -1444,12 +1504,7 @@ elif selected_page == "Sky Conditions":
         st.plotly_chart(_themed_layout(fig_feature, 480), use_container_width=True)
 
     st.subheader("Scoring Feature Table")
-    diagnostic_cols = [c for c in [
-        "local_dt","stargazing_score","recommendation","cloud_value","transparency_value",
-        "seeing_value","visibility_penalty","transparency_norm","seeing_norm","humidity_quality",
-        "moon_brightness_penalty","effective_darkness","atmospheric_score",
-    ] if c in score_df.columns]
-    st.dataframe(score_df[diagnostic_cols].head(60), use_container_width=True)
+    render_scoring_feature_table(score_df, max_rows=60)
 
 
 elif selected_page == "Sky Path":
@@ -1566,6 +1621,8 @@ elif selected_page == "Methodology":
 elif selected_page == "Raw Data":
     st.subheader("Raw Data")
     st.caption("These tables are mainly for debugging and transparency.")
+    with st.expander("Scoring Feature Table (Diagnostic View)", expanded=True):
+        render_scoring_feature_table(score_df, max_rows=120)
     with st.expander("Generated Master DataFrame"):
         st.dataframe(master_df, use_container_width=True)
     with st.expander("Scored DataFrame"):

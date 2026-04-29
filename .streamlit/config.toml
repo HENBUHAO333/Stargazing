@@ -1,6 +1,20 @@
 [theme]
-primaryColor       = "#c478d2"
-backgroundColor    = "#090614"
+primaryColor             = "#c478d2"
+backgroundColor          = "#090614"
 secondaryBackgroundColor = "#100d1e"
-textColor          = "#e4dff0"
-font               = "serif"
+textColor                = "#e4dff0"
+
+[[theme.fontFaces]]
+fontFamily = "DM Serif Display"
+src        = "url(./static/DMSerifDisplay-Regular.ttf)"
+
+[[theme.fontFaces]]
+fontFamily = "DM Serif Display"
+src        = "url(./static/DMSerifDisplay-Italic.ttf)"
+
+[[theme.fontFaces]]
+fontFamily = "DM Sans"
+src        = "url(./static/DMSans.ttf)"
+
+[server]
+enableStaticServing = true

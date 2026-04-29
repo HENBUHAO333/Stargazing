@@ -43,48 +43,6 @@ st.set_page_config(
 # NEBULA DUSK — FULL THEME CSS
 # ============================================================
 
-st.markdown(
-    """
-    <style>
-    @font-face {
-        font-family: 'DM Serif Display';
-        font-style: normal;
-        font-weight: 400;
-        font-display: swap;
-        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-serif-display@5/files/dm-serif-display-latin-400-normal.woff2') format('woff2');
-    }
-    @font-face {
-        font-family: 'DM Serif Display';
-        font-style: italic;
-        font-weight: 400;
-        font-display: swap;
-        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-serif-display@5/files/dm-serif-display-latin-400-italic.woff2') format('woff2');
-    }
-    @font-face {
-        font-family: 'DM Sans';
-        font-style: normal;
-        font-weight: 400;
-        font-display: swap;
-        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-400-normal.woff2') format('woff2');
-    }
-    @font-face {
-        font-family: 'DM Sans';
-        font-style: normal;
-        font-weight: 500;
-        font-display: swap;
-        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-500-normal.woff2') format('woff2');
-    }
-    @font-face {
-        font-family: 'DM Sans';
-        font-style: normal;
-        font-weight: 600;
-        font-display: swap;
-        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-600-normal.woff2') format('woff2');
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
 
 st.markdown(
     """
@@ -825,6 +783,37 @@ def _star_field(n: int = 140) -> str:
 
     return "\n".join(circles)
 
+
+st.markdown(
+    """
+    <img src="x" style="display:none" onerror="
+        (function() {
+            if (window.__nd_font_applied) return;
+            window.__nd_font_applied = true;
+            var S = 'DM Serif Display, Georgia, serif';
+            function fix() {
+                var sel = '.hero-title,.section-heading,.window-time,.window-score,.metric-large';
+                document.querySelectorAll(sel).forEach(function(el) {
+                    el.style.setProperty('font-family', S, 'important');
+                    el.style.setProperty('font-weight', '400', 'important');
+                });
+                document.querySelectorAll(
+                    '[data-testid=stHeadingWithActionElements] h1,' +
+                    '[data-testid=stHeadingWithActionElements] h2,' +
+                    '[data-testid=stHeadingWithActionElements] h3'
+                ).forEach(function(el) {
+                    el.style.setProperty('font-family', S, 'important');
+                    el.style.setProperty('font-weight', '400', 'important');
+                });
+            }
+            fix();
+            setInterval(fix, 300);
+            new MutationObserver(fix).observe(document.documentElement, {childList:true, subtree:true});
+        })();
+    ">
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     f"""

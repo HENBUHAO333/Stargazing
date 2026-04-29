@@ -8,6 +8,8 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 
+from rag_utils import retrieve_context, format_retrieved_context
+
 load_dotenv()
 
 # ============================================================
@@ -1428,6 +1430,93 @@ Mention clearly if fallback data sources were used.
         return f"LLM explanation failed: {e}"
 
 
+def generate_rag_recommendation(context: Dict, user_question: str = "") -> str:
+    """
+    RAG-enhanced AI insight.
+
+    This function retrieves local stargazing knowledge and combines it with
+    the fixed model output. It does not recompute or modify the score.
+    """
+
+    if not OPENAI_API_KEY:
+        return "RAG AI explanation unavailable because OPENAI_API_KEY is not set."
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        city = context.get("city", "the selected location")
+
+        retrieval_query = user_question.strip()
+
+        if not retrieval_query:
+            retrieval_query = (
+                f"Explain stargazing conditions for {city}. "
+                f"Include sky darkness, moon illumination, cloud cover, "
+                f"seeing, transparency, and observing recommendations."
+            )
+
+        retrieved = retrieve_context(retrieval_query, top_k=4)
+        retrieved_context = format_retrieved_context(retrieved)
+
+        prompt = f"""
+You are a stargazing recommendation assistant.
+
+Use two sources of information:
+1. Fixed model output from the app.
+2. Retrieved stargazing knowledge context.
+
+Rules:
+- Do not recalculate the score.
+- Do not change the recommendation label.
+- Do not invent weather values.
+- Do not claim that a specific star, planet, constellation, or deep-sky object is visible unless it appears in the fixed model output or retrieved context.
+- If giving object suggestions, keep them general: Moon, bright planets, bright stars, star clusters, galaxies, nebulae, Milky Way.
+- Use the retrieved context to explain the model output in user-friendly language.
+- If fallback data sources were used, mention that the result is less precise.
+- Format the answer in clear markdown with headings and bullet points.
+
+Fixed model output:
+{json.dumps(context, default=str, indent=2)}
+
+Retrieved knowledge context:
+{retrieved_context}
+
+User question:
+{user_question if user_question else "Give a practical stargazing recommendation."}
+
+Write the answer in this markdown format:
+
+## Overall Outlook
+Briefly summarize the forecast quality.
+
+## Best Viewing Windows
+List the best windows from the model output.
+
+## Why Conditions Are Good or Limited
+Explain the main factors: cloud cover, transparency, seeing, moon illumination, darkness, and city lights.
+
+## What to Observe
+Give general observing suggestions only.
+
+## Practical Advice
+Give user-friendly planning advice.
+
+## Data Limitations
+Mention fallback or approximation limits if relevant.
+"""
+
+        response = client.responses.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            input=prompt,
+        )
+
+        return response.output_text
+
+    except Exception as e:
+        return f"RAG recommendation failed: {e}"
+        
 # ============================================================
 # MAIN PIPELINE
 # ============================================================

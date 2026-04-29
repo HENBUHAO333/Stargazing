@@ -903,10 +903,29 @@ def fmt_hour(h):
 
 
 # ============================================================
-# INITIAL STATE
+# RUN PIPELINE
 # ============================================================
 
-if not run_button:
+if run_button:
+    with st.spinner("Fetching live weather and astronomy data..."):
+        try:
+            result = cached_run_pipeline(
+                city_name=city_name,
+                lat=lat,
+                lon=lon,
+                timezone=timezone,
+                days=days,
+                bortle_index=bortle_index,
+                include_tad=include_tad,
+            )
+            st.session_state["pipeline_result"] = result
+            st.session_state["pipeline_bortle"] = bortle_index
+        except Exception as e:
+            st.error("The live scoring pipeline failed.")
+            st.exception(e)
+            st.stop()
+
+if "pipeline_result" not in st.session_state:
     st.markdown(
         """
         <div class="hero-card">
@@ -960,26 +979,8 @@ if not run_button:
 
     st.stop()
 
-
-# ============================================================
-# RUN PIPELINE
-# ============================================================
-
-with st.spinner("Fetching live weather and astronomy data..."):
-    try:
-        result = cached_run_pipeline(
-            city_name=city_name,
-            lat=lat,
-            lon=lon,
-            timezone=timezone,
-            days=days,
-            bortle_index=bortle_index,
-            include_tad=include_tad,
-        )
-    except Exception as e:
-        st.error("The live scoring pipeline failed.")
-        st.exception(e)
-        st.stop()
+result = st.session_state["pipeline_result"]
+bortle_index = st.session_state.get("pipeline_bortle", bortle_index)
 
 
 # ============================================================

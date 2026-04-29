@@ -1429,11 +1429,12 @@ Mention clearly if fallback data sources were used.
     except Exception as e:
         return f"LLM explanation failed: {e}"
 
+
 def generate_rag_recommendation(context: Dict, user_question: str = "") -> str:
     """
     RAG-enhanced AI insight.
 
-    The RAG layer retrieves local stargazing knowledge and combines it with
+    This function retrieves local stargazing knowledge and combines it with
     the fixed model output. It does not recompute or modify the score.
     """
 
@@ -1470,7 +1471,7 @@ Rules:
 - Do not recalculate the score.
 - Do not change the recommendation label.
 - Do not invent weather values.
-- Do not claim that a specific star, planet, or constellation is visible unless it appears in the retrieved context or fixed model output.
+- Do not claim that a specific star, planet, constellation, or deep-sky object is visible unless it appears in the fixed model output or retrieved context.
 - If giving object suggestions, keep them general: Moon, bright planets, bright stars, star clusters, galaxies, nebulae, Milky Way.
 - Use the retrieved context to explain the model output in user-friendly language.
 - If fallback data sources were used, mention that the result is less precise.
@@ -1485,13 +1486,25 @@ Retrieved knowledge context:
 User question:
 {user_question if user_question else "Give a practical stargazing recommendation."}
 
-Write a concise but useful answer with:
-1. Overall outlook
-2. Best viewing windows
-3. Why these windows are good or bad
-4. What objects are likely worth observing
-5. Practical advice
-6. Data/source limitation if fallback data was used
+Write the answer in this markdown format:
+
+## Overall Outlook
+Briefly summarize the forecast quality.
+
+## Best Viewing Windows
+List the best windows from the model output.
+
+## Why Conditions Are Good or Limited
+Explain the main factors: cloud cover, transparency, seeing, moon illumination, darkness, and city lights.
+
+## What to Observe
+Give general observing suggestions only.
+
+## Practical Advice
+Give user-friendly planning advice.
+
+## Data Limitations
+Mention fallback or approximation limits if relevant.
 """
 
         response = client.responses.create(
@@ -1503,8 +1516,7 @@ Write a concise but useful answer with:
 
     except Exception as e:
         return f"RAG recommendation failed: {e}"
-
-
+        
 # ============================================================
 # MAIN PIPELINE
 # ============================================================

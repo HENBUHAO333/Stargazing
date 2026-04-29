@@ -526,6 +526,29 @@ st.markdown(
         margin-right: 6px;
         display: inline-block;
     }
+
+    /* ── Cluster badge ────────────────────────────────────── */
+    .cluster-badge {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 99px;
+        background: rgba(99,102,241,0.12);
+        color: #a5b4fc;
+        border: 1px solid rgba(165,180,252,0.25);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 11px;
+        font-weight: 600;
+        margin-top: 10px;
+    }
+    .cluster-desc {
+        font-family: 'DM Sans', sans-serif;
+        font-size: 12px;
+        font-weight: 300;
+        font-style: italic;
+        color: #6b6585;
+        margin-top: 6px;
+        line-height: 1.55;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -877,10 +900,20 @@ def render_source_badges(result):
 
 
 def render_window_card(rank, row):
-    score      = safe_numeric(row.get("stargazing_score"), 0)
-    label      = row.get("recommendation", "N/A")
-    time_label = row.get("time_label", "N/A")
-    explanation = explain_row(row)
+    score         = safe_numeric(row.get("stargazing_score"), 0)
+    label         = row.get("recommendation", "N/A")
+    time_label    = row.get("time_label", "N/A")
+    explanation   = explain_row(row)
+    cluster_label = row.get("cluster_label", "")
+    cluster_desc  = row.get("cluster_description", "")
+
+    cluster_html = ""
+    if cluster_label and cluster_label != "Unknown":
+        cluster_html = (
+            f'<div><span class="cluster-badge">{cluster_label}</span></div>'
+            f'<p class="cluster-desc">{cluster_desc}</p>'
+        )
+
     st.markdown(
         f"""
         <div class="window-card">
@@ -889,6 +922,7 @@ def render_window_card(rank, row):
             <div class="window-score">{score:.1f}</div>
             <span class="badge {badge_class(label)}">{label}</span>
             <p class="muted" style="margin-top:12px;">{explanation}</p>
+            {cluster_html}
         </div>
         """,
         unsafe_allow_html=True,

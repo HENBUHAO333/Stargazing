@@ -1,9 +1,11 @@
 import json
+import math
 import random
 from html import escape
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+from datetime import datetime
 
 # ============================================================
 # BACKEND IMPORTS
@@ -1805,6 +1807,244 @@ def render_window_card(rank, row):
 
 
 # ============================================================
+# SKY CLOCK + NIGHT TIMELINE CARDS
+# ============================================================
+
+def _sky_clock_card_html(city_name: str = "New York City") -> str:
+    """Animated polar sky-clock card with moon position + legend."""
+    now    = datetime.now()
+    hour_f = now.hour + now.minute / 60.0
+
+    # Approximate moon trajectory (spring, ~NYC)
+    moon_rise = 18.8
+    moon_set  = 27.2   # 3:12 am next day
+    progress  = max(0.0, min(1.0, (hour_f - moon_rise) / (moon_set - moon_rise)))
+    moon_above = moon_rise <= hour_f <= moon_set
+
+    moon_az  = 80 + progress * 200
+    moon_alt = max(0.0, 52.0 * math.sin(progress * math.pi))
+    moon_r_p = (1 - moon_alt / 90.0) * 88
+    moon_ang = (moon_az - 90) * math.pi / 180
+    moon_x   = 110 + moon_r_p * math.cos(moon_ang)
+    moon_y   = 110 + moon_r_p * math.sin(moon_ang)
+
+    moon_az_disp  = int(moon_az % 360)
+    moon_alt_disp = int(moon_alt)
+    ms_h = int(moon_set) % 24
+    ms_m = int((moon_set % 1) * 60)
+    moonset_str = f"{ms_h % 12 or 12}:{ms_m:02d} {'am' if ms_h < 12 else 'pm'}"
+
+    rng = random.Random(7)
+    star_els = []
+    for _ in range(72):
+        az_s = rng.uniform(0, 2 * math.pi)
+        r_s  = rng.uniform(0, 1) ** 0.5 * 85
+        sx   = 110 + r_s * math.cos(az_s)
+        sy   = 110 + r_s * math.sin(az_s)
+        sr   = round(rng.uniform(0.3, 1.4), 1)
+        op   = round(rng.uniform(0.12, 0.68), 2)
+        op2  = round(min(op + rng.uniform(0.15, 0.35), 0.92), 2)
+        dur  = round(rng.uniform(1.5, 4.2), 1)
+        beg  = round(rng.uniform(0, dur), 1)
+        star_els.append(
+            f'<circle cx="{sx:.1f}" cy="{sy:.1f}" r="{sr}" fill="#e4dff0" opacity="{op}">'
+            f'<animate attributeName="opacity" values="{op};{op2};{op}" '
+            f'dur="{dur}s" begin="{beg}s" repeatCount="indefinite"/>'
+            f'</circle>'
+        )
+
+    trail_pts = []
+    p0 = max(0.0, progress - 0.28)
+    for i in range(13):
+        p     = p0 + (progress - p0) * i / 12
+        az_t  = 80 + p * 200
+        alt_t = max(0.0, 52.0 * math.sin(p * math.pi))
+        if alt_t <= 0:
+            continue
+        r_t  = (1 - alt_t / 90.0) * 88
+        an_t = (az_t - 90) * math.pi / 180
+        trail_pts.append(f"{110 + r_t * math.cos(an_t):.1f},{110 + r_t * math.sin(an_t):.1f}")
+    trail_svg = (
+        f'<polyline points="{" ".join(trail_pts)}" fill="none" stroke="#c478d2" '
+        f'stroke-width="1" stroke-opacity="0.28" stroke-dasharray="3 4"/>'
+        if len(trail_pts) >= 2 else ""
+    )
+
+    moon_svg = ""
+    if moon_above:
+        moon_svg = (
+            f'<circle cx="{moon_x:.1f}" cy="{moon_y:.1f}" r="16" fill="#c478d2" fill-opacity="0.06"/>'
+            f'<circle cx="{moon_x:.1f}" cy="{moon_y:.1f}" r="9"  fill="#c478d2" fill-opacity="0.14"/>'
+            f'<circle cx="{moon_x:.1f}" cy="{moon_y:.1f}" r="5.5" fill="#c478d2" fill-opacity="0.82">'
+            f'<animate attributeName="fill-opacity" values="0.82;0.50;0.82" dur="3.2s" repeatCount="indefinite"/>'
+            f'</circle>'
+            f'<circle cx="{moon_x - 1.5:.1f}" cy="{moon_y - 1.5:.1f}" r="1.6" fill="white" fill-opacity="0.42"/>'
+        )
+
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="220" height="220" viewBox="0 0 220 220">'
+        '<defs>'
+        '<radialGradient id="skyBgNd" cx="50%" cy="50%" r="50%">'
+        '<stop offset="0%"   stop-color="#c478d2" stop-opacity="0.05"/>'
+        '<stop offset="60%"  stop-color="#090614" stop-opacity="0.95"/>'
+        '<stop offset="100%" stop-color="#090614" stop-opacity="1"/>'
+        '</radialGradient>'
+        '<clipPath id="skyClipNd"><circle cx="110" cy="110" r="100"/></clipPath>'
+        '</defs>'
+        '<circle cx="110" cy="110" r="108" fill="none" stroke="rgba(196,120,210,0.16)" stroke-width="1.5"/>'
+        '<circle cx="110" cy="110" r="100" fill="url(#skyBgNd)"/>'
+        '<circle cx="110" cy="110" r="33" fill="none" stroke="rgba(196,120,210,0.10)" stroke-width="0.7" stroke-dasharray="3 5"/>'
+        '<circle cx="110" cy="110" r="66" fill="none" stroke="rgba(196,120,210,0.10)" stroke-width="0.7" stroke-dasharray="3 5"/>'
+        '<circle cx="110" cy="110" r="99" fill="none" stroke="rgba(196,120,210,0.10)" stroke-width="0.7" stroke-dasharray="3 5"/>'
+        '<line x1="110" y1="12" x2="110" y2="208" stroke="rgba(196,120,210,0.07)" stroke-width="0.5"/>'
+        '<line x1="12" y1="110" x2="208" y2="110" stroke="rgba(196,120,210,0.07)" stroke-width="0.5"/>'
+        f'<g clip-path="url(#skyClipNd)">{"".join(star_els)}</g>'
+        f'{trail_svg}'
+        '<text x="110" y="17"  text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="700" fill="#8880a0" font-family="DM Sans,sans-serif">N</text>'
+        '<text x="203" y="110" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="700" fill="#8880a0" font-family="DM Sans,sans-serif">E</text>'
+        '<text x="110" y="203" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="700" fill="#8880a0" font-family="DM Sans,sans-serif">S</text>'
+        '<text x="17"  y="110" text-anchor="middle" dominant-baseline="middle" font-size="9" font-weight="700" fill="#8880a0" font-family="DM Sans,sans-serif">W</text>'
+        '<circle cx="110" cy="110" r="2.5" fill="#554f6a"/>'
+        f'{moon_svg}'
+        '</svg>'
+    )
+
+    legend_items = [
+        ("Moon azimuth",  f"{moon_az_disp}°",        False),
+        ("Moon altitude", f"{moon_alt_disp}°",       False),
+        None,
+        ("Moon phase",    "12% Waxing Crescent",     True),
+        ("Moonset",       moonset_str,                False),
+        ("Bortle class",  "5 — Suburban",             False),
+    ]
+    rows_html = ""
+    for item in legend_items:
+        if item is None:
+            rows_html += '<div style="height:1px;background:rgba(196,120,210,0.13);margin:6px 0;"></div>'
+        else:
+            lbl, val, accent_val = item
+            val_color = "#c478d2" if accent_val else "#e4dff0"
+            rows_html += (
+                f'<div style="display:flex;justify-content:space-between;'
+                f'align-items:baseline;margin-bottom:8px;">'
+                f'<span style="font-size:12px;color:#8880a0;">{lbl}</span>'
+                f'<span style="font-size:13px;color:{val_color};font-weight:600;">{val}</span>'
+                f'</div>'
+            )
+
+    best_window_hour = 22.0
+    adj = hour_f if hour_f <= best_window_hour else hour_f - 24
+    mins_until = max(0, int((best_window_hour - adj) * 60))
+    countdown_html = (
+        f'<span style="font-size:12px;color:#c478d2;">'
+        f'★ Best window opens in <strong>{mins_until} min</strong> — run pipeline for details'
+        f'</span>'
+        if mins_until > 0 else
+        f'<span style="font-size:12px;color:#c478d2;">'
+        f'★ Prime observing window active now — run pipeline for details'
+        f'</span>'
+    )
+
+    return (
+        '<div class="section-card" style="display:flex;gap:28px;align-items:center;">'
+        f'<div style="flex-shrink:0;">{svg}</div>'
+        '<div style="flex:1;">'
+        '<span class="section-label">Sky Now · ' + city_name + '</span>'
+        + rows_html +
+        '<div style="margin-top:12px;padding:8px 12px;border-radius:8px;'
+        'background:rgba(196,120,210,0.10);border:1px solid rgba(196,120,210,0.20);">'
+        + countdown_html +
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def _night_timeline_card_html() -> str:
+    """Dusk-to-dawn phase bar with animated NOW cursor."""
+    now    = datetime.now()
+    hour_f = now.hour + now.minute / 60.0
+
+    t_start = 19.7
+    t_end   = 29.03
+    adj_h   = hour_f if hour_f >= t_start else hour_f + 24
+    now_pct = max(0.02, min(0.97, (adj_h - t_start) / (t_end - t_start)))
+
+    phases = [
+        ("☀",  "Sunset",      "7:42 pm", 0.00),
+        (None, "Civil",       "8:09 pm", 0.12),
+        (None, "Nautical",    "8:38 pm", 0.22),
+        ("★",  "Astro Dark",  "9:11 pm", 0.33),
+        ("◎",  "Best Window", "10–11 pm",0.50),
+        (None, "Dawn",        "5:02 am", 1.00),
+    ]
+
+    ticks_html = "".join(
+        f'<div style="position:absolute;top:0;left:{p[3]*100:.1f}%;'
+        f'width:1px;height:100%;background:rgba(196,120,210,0.22);"></div>'
+        for p in phases
+    )
+
+    labels_html = ""
+    for i, p in enumerate(phases):
+        icon, label, time_s, pct = p
+        align     = "flex-end" if i == len(phases) - 1 else "center"
+        transform = "translateX(0%)" if i == len(phases) - 1 else "translateX(-50%)"
+        lbl_color = "#e4dff0" if icon else "#8880a0"
+        lbl_weight= "600" if icon else "400"
+        icon_html = (
+            f'<span style="font-size:10px;color:#c478d2;margin-bottom:1px;">{icon}</span>'
+            if icon else ""
+        )
+        labels_html += (
+            f'<div style="position:absolute;left:{pct*100:.1f}%;transform:{transform};'
+            f'display:flex;flex-direction:column;align-items:{align};gap:1px;">'
+            f'{icon_html}'
+            f'<span style="font-size:10px;color:{lbl_color};font-weight:{lbl_weight};'
+            f'white-space:nowrap;">{label}</span>'
+            f'<span style="font-size:9px;color:#554f6a;white-space:nowrap;">{time_s}</span>'
+            f'</div>'
+        )
+
+    return (
+        '<style>'
+        '@keyframes nd-now-glow {'
+        '0%,100%{box-shadow:0 0 0 2px rgba(196,120,210,0.0),0 0 10px #c478d2;}'
+        '50%{box-shadow:0 0 0 4px rgba(196,120,210,0.22),0 0 20px #c478d2;}'
+        '}'
+        '</style>'
+        '<div class="section-card">'
+        '<span class="section-label">Tonight\'s Sky Timeline</span>'
+        '<div style="position:relative;margin-bottom:34px;">'
+        '<div style="height:10px;border-radius:99px;'
+        'background:linear-gradient(to right,'
+        'rgba(224,130,64,0.20) 0%,rgba(80,96,192,0.38) 12%,'
+        'rgba(10,10,40,0.88) 30%,rgba(5,5,20,0.96) 55%,'
+        'rgba(10,10,40,0.88) 75%,rgba(80,96,192,0.38) 88%,'
+        'rgba(224,130,64,0.20) 100%);'
+        'border:1px solid rgba(196,120,210,0.14);"></div>'
+        '<div style="position:absolute;top:0;left:48%;width:14%;height:100%;'
+        'border-radius:99px;background:rgba(196,120,210,0.20);'
+        'border:1px solid rgba(196,120,210,0.38);"></div>'
+        f'<div style="position:absolute;inset:0;">{ticks_html}</div>'
+        f'<div style="position:absolute;top:-6px;left:{now_pct*100:.1f}%;'
+        'transform:translateX(-50%);'
+        'display:flex;flex-direction:column;align-items:center;gap:2px;">'
+        '<div style="width:14px;height:14px;border-radius:50%;'
+        'background:#c478d2;border:2px solid #090614;'
+        'animation:nd-now-glow 2s ease-in-out infinite;"></div>'
+        '<div style="width:1px;height:22px;'
+        'background:linear-gradient(#c478d2,transparent);"></div>'
+        '<span style="font-size:9px;color:#c478d2;font-weight:700;'
+        'white-space:nowrap;margin-top:-2px;">NOW</span>'
+        '</div>'
+        '</div>'
+        f'<div style="position:relative;height:48px;">{labels_html}</div>'
+        '</div>'
+    )
+
+
+# ============================================================
 # RUN PIPELINE
 # ============================================================
 
@@ -1897,6 +2137,11 @@ if "pipeline_result" not in st.session_state:
         """,
         unsafe_allow_html=True,
     )
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown(_sky_clock_card_html(city_name), unsafe_allow_html=True)
+    with col_b:
+        st.markdown(_night_timeline_card_html(), unsafe_allow_html=True)
     st.stop()
 
 

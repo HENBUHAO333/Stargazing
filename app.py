@@ -1103,6 +1103,39 @@ def _themed_layout(fig, height: int = 480):
     return fig
 
 
+HUMAN_LABELS = {
+    "local_dt": "Local Time",
+    "stargazing_score": "Stargazing Score",
+    "recommendation": "Recommendation",
+    "cloud_value": "Cloud Cover",
+    "transparency_value": "Transparency",
+    "seeing_value": "Seeing",
+    "moon_illuminated_pct": "Moon Illumination (%)",
+    "is_dark_enough": "Dark Enough",
+    "is_moon_up": "Moon Above Horizon",
+    "visibility_penalty": "Visibility Penalty",
+    "transparency_norm": "Transparency Quality",
+    "seeing_norm": "Seeing Quality",
+    "humidity_quality": "Humidity Quality",
+    "moon_brightness_penalty": "Moon Brightness Penalty",
+    "effective_darkness": "Effective Darkness",
+    "atmospheric_score": "Atmospheric Score",
+    "time_label": "Time Window",
+    "count": "Count",
+    "factor": "Factor",
+    "value": "Value",
+    "Hour": "Hour of Day",
+}
+
+
+def human_label(name: str) -> str:
+    return HUMAN_LABELS.get(name, name.replace("_", " ").title())
+
+
+def labels_for(*names: str) -> dict:
+    return {name: human_label(name) for name in names}
+
+
 def build_score_heatmap(score_df):
     heatmap_df = score_df.copy()
     heatmap_df["local_dt"] = pd.to_datetime(heatmap_df["local_dt"], errors="coerce")
@@ -1133,7 +1166,15 @@ def build_factor_chart(score_df):
     plot_df["local_dt"] = pd.to_datetime(plot_df["local_dt"], errors="coerce")
     plot_df = plot_df.dropna(subset=["local_dt"])
     long_df = plot_df.melt(id_vars=["local_dt"], value_vars=existing_cols, var_name="factor", value_name="value")
-    fig = px.line(long_df, x="local_dt", y="value", color="factor", title="Key Stargazing Factors Over Time")
+    long_df["factor"] = long_df["factor"].map(human_label)
+    fig = px.line(
+        long_df,
+        x="local_dt",
+        y="value",
+        color="factor",
+        title="Key Stargazing Factors Over Time",
+        labels=labels_for("local_dt", "value", "factor"),
+    )
     return _themed_layout(fig, 520)
 
 
@@ -1146,6 +1187,7 @@ def build_recommendation_distribution(score_df):
         dist, x="recommendation", y="count", color="recommendation",
         title="Distribution of Forecasted Stargazing Quality",
         color_discrete_sequence=["#c478d2","#9b5ab0","#7a3d8c","#5c2d6b","#3e1e4a"],
+        labels=labels_for("recommendation", "count"),
     )
     return _themed_layout(fig, 420)
 
@@ -1419,6 +1461,11 @@ if selected_page == "Dashboard":
             "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
             "is_dark_enough","is_moon_up","effective_darkness","atmospheric_score",
         ] if c in chart_df.columns],
+        labels=labels_for(
+            "local_dt", "stargazing_score", "recommendation", "cloud_value",
+            "transparency_value", "seeing_value", "moon_illuminated_pct",
+            "is_dark_enough", "is_moon_up", "effective_darkness", "atmospheric_score",
+        ),
     )
     fig_score.update_layout(yaxis_range=[0, 100])
     st.plotly_chart(_themed_layout(fig_score, 480), use_container_width=True)
@@ -1441,6 +1488,13 @@ elif selected_page == "Forecast Timeline":
             "seeing_norm","humidity_quality","moon_brightness_penalty",
             "effective_darkness","atmospheric_score",
         ] if c in chart_df.columns],
+        labels=labels_for(
+            "local_dt", "stargazing_score", "recommendation", "cloud_value",
+            "transparency_value", "seeing_value", "moon_illuminated_pct",
+            "is_dark_enough", "is_moon_up", "visibility_penalty", "transparency_norm",
+            "seeing_norm", "humidity_quality", "moon_brightness_penalty",
+            "effective_darkness", "atmospheric_score",
+        ),
     )
     fig_score.update_layout(yaxis_range=[0, 100])
     st.plotly_chart(_themed_layout(fig_score, 560), use_container_width=True)
@@ -1464,6 +1518,12 @@ elif selected_page == "Best Windows":
             "is_dark_enough","is_moon_up","visibility_penalty","effective_darkness","atmospheric_score",
         ] if c in top_windows.columns],
         title="Top 10 Stargazing Windows",
+        labels=labels_for(
+            "stargazing_score", "time_label", "recommendation", "cloud_value",
+            "transparency_value", "seeing_value", "moon_illuminated_pct",
+            "is_dark_enough", "is_moon_up", "visibility_penalty",
+            "effective_darkness", "atmospheric_score",
+        ),
     )
     fig_top.update_layout(xaxis_range=[0, 100])
     st.plotly_chart(_themed_layout(fig_top, 520), use_container_width=True)
@@ -1479,10 +1539,22 @@ elif selected_page == "Sky Conditions":
         "moon_brightness_penalty","effective_darkness","atmospheric_score","stargazing_score",
     ] if c in score_df.columns]
     if feature_options:
-        selected_feature = st.selectbox("Inspect one feature", feature_options)
+        feature_label_to_code = {human_label(c): c for c in feature_options}
+        selected_feature_label = st.selectbox(
+            "Inspect one feature",
+            list(feature_label_to_code.keys()),
+        )
+        selected_feature = feature_label_to_code[selected_feature_label]
         plot_df = score_df.copy()
         plot_df["local_dt"] = pd.to_datetime(plot_df["local_dt"], errors="coerce")
-        fig_feature = px.line(plot_df, x="local_dt", y=selected_feature, markers=True, title=f"{selected_feature} Over Time")
+        fig_feature = px.line(
+            plot_df,
+            x="local_dt",
+            y=selected_feature,
+            markers=True,
+            title=f"{selected_feature_label} Over Time",
+            labels=labels_for("local_dt", selected_feature),
+        )
         st.plotly_chart(_themed_layout(fig_feature, 480), use_container_width=True)
 
     st.subheader("Scoring Feature Table")
@@ -1510,6 +1582,7 @@ elif selected_page == "Sky Path":
                     pos_plot_df, r="Altitude (°)", theta="Azimuth (°)", color="Object",
                     hover_data=[c for c in ["Hour","Illuminated (%)","Moon Phase"] if c in pos_plot_df.columns],
                     title="Sun and Moon Position in the Sky",
+                    labels=labels_for("Object", "Hour"),
                 )
                 st.plotly_chart(_themed_layout(fig_pos, 650), use_container_width=True)
             else:

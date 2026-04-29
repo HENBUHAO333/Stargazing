@@ -13,6 +13,8 @@ try:
         CITY_PRESETS,
         generate_llm_recommendation,
         generate_rag_recommendation,
+        generate_forecast_ai_insight,
+        answer_semantic_knowledge_question,
         fetch_tad_positions,
     )
     HAS_RAG_BACKEND = True
@@ -25,6 +27,8 @@ except ImportError:
         fetch_tad_positions,
     )
     generate_rag_recommendation = None
+    generate_forecast_ai_insight = None
+    answer_semantic_knowledge_question = None
     HAS_RAG_BACKEND = False
 
 
@@ -43,6 +47,48 @@ st.set_page_config(
 # NEBULA DUSK — FULL THEME CSS
 # ============================================================
 
+st.markdown(
+    """
+    <style>
+    @font-face {
+        font-family: 'DM Serif Display';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-serif-display@5/files/dm-serif-display-latin-400-normal.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'DM Serif Display';
+        font-style: italic;
+        font-weight: 400;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-serif-display@5/files/dm-serif-display-latin-400-italic.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'DM Sans';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-400-normal.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'DM Sans';
+        font-style: normal;
+        font-weight: 500;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-500-normal.woff2') format('woff2');
+    }
+    @font-face {
+        font-family: 'DM Sans';
+        font-style: normal;
+        font-weight: 600;
+        font-display: swap;
+        src: url('https://cdn.jsdelivr.net/npm/@fontsource/dm-sans@5/files/dm-sans-latin-600-normal.woff2') format('woff2');
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.markdown(
     """
@@ -92,25 +138,10 @@ st.markdown(
         letter-spacing: -0.01em;
     }
 
-    p, li, label, td, th,
+    p, li, span, label, td, th,
     button, input, select, textarea,
     [data-testid="stMarkdownContainer"] p {
         font-family: 'DM Sans', system-ui, sans-serif !important;
-    }
-
-    /* Keep Streamlit/Material icons from rendering as raw text names. */
-    .material-icons,
-    .material-symbols-rounded,
-    .material-symbols-outlined,
-    [class^="material-symbols-"],
-    [class*=" material-symbols-"] {
-        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
-        font-style: normal !important;
-        font-weight: normal !important;
-        letter-spacing: normal !important;
-        text-transform: none !important;
-        white-space: nowrap !important;
-        direction: ltr !important;
     }
 
     /* Subheader override */
@@ -136,24 +167,12 @@ st.markdown(
         background: transparent !important;
     }
     [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] p {
-        color: var(--text) !important;
-        font-family: 'DM Sans', system-ui, sans-serif !important;
-        font-size: 13px !important;
-    }
+    [data-testid="stSidebar"] p,
     [data-testid="stSidebar"] span,
     [data-testid="stSidebar"] div {
         color: var(--text) !important;
-    }
-    [data-testid="stSidebarCollapseButton"] span,
-    [data-testid="collapsedControl"] span,
-    button[aria-label*="sidebar" i] span {
-        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
-        font-style: normal !important;
-        font-weight: normal !important;
-        font-size: 20px !important;
-        letter-spacing: normal !important;
-        text-transform: none !important;
+        font-family: 'DM Sans', system-ui, sans-serif !important;
+        font-size: 13px !important;
     }
     [data-testid="stSidebar"] .stMarkdown p {
         color: var(--text-muted) !important;
@@ -812,37 +831,6 @@ def _star_field(n: int = 140) -> str:
 
 
 st.markdown(
-    """
-    <img src="x" style="display:none" onerror="
-        (function() {
-            if (window.__nd_font_applied) return;
-            window.__nd_font_applied = true;
-            var S = 'DM Serif Display, Georgia, serif';
-            function fix() {
-                var sel = '.hero-title,.section-heading,.window-time,.window-score,.metric-large';
-                document.querySelectorAll(sel).forEach(function(el) {
-                    el.style.setProperty('font-family', S, 'important');
-                    el.style.setProperty('font-weight', '400', 'important');
-                });
-                document.querySelectorAll(
-                    '[data-testid=stHeadingWithActionElements] h1,' +
-                    '[data-testid=stHeadingWithActionElements] h2,' +
-                    '[data-testid=stHeadingWithActionElements] h3'
-                ).forEach(function(el) {
-                    el.style.setProperty('font-family', S, 'important');
-                    el.style.setProperty('font-weight', '400', 'important');
-                });
-            }
-            fix();
-            setInterval(fix, 300);
-            new MutationObserver(fix).observe(document.documentElement, {childList:true, subtree:true});
-        })();
-    ">
-    """,
-    unsafe_allow_html=True,
-)
-
-st.markdown(
     f"""
     <svg xmlns="http://www.w3.org/2000/svg"
          style="position:fixed;top:0;left:0;width:100vw;height:100vh;
@@ -982,12 +970,39 @@ def cached_generate_llm(context):
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def cached_generate_rag(context, user_question):
+    """
+    Backward-compatible cache wrapper.
+    """
     if generate_rag_recommendation is None:
         return (
             "RAG backend function not found. Please add "
             "`generate_rag_recommendation()` to backend.py first."
         )
     return generate_rag_recommendation(context, user_question=user_question)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_generate_forecast_insight(context):
+    if generate_forecast_ai_insight is None:
+        return (
+            "Forecast AI Insight backend function not found. Please add "
+            "`generate_forecast_ai_insight()` to backend.py first."
+        )
+    return generate_forecast_ai_insight(context)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_answer_semantic_question(user_question, context, use_forecast_context):
+    if answer_semantic_knowledge_question is None:
+        return (
+            "Semantic Search backend function not found. Please add "
+            "`answer_semantic_knowledge_question()` to backend.py first."
+        )
+    return answer_semantic_knowledge_question(
+        user_question=user_question,
+        context=context,
+        use_forecast_context=use_forecast_context,
+    )
 
 
 # ============================================================
@@ -1001,39 +1016,6 @@ def safe_numeric(value, default=None):
         return float(value)
     except Exception:
         return default
-
-
-def render_scoring_feature_table(table_df: pd.DataFrame, max_rows: int = 60):
-    preferred_cols = [
-        "local_dt",
-        "stargazing_score",
-        "recommendation",
-        "cloud_value",
-        "transparency_value",
-        "seeing_value",
-        "visibility_penalty",
-        "transparency_norm",
-        "seeing_norm",
-        "humidity_quality",
-        "moon_brightness_penalty",
-        "effective_darkness",
-        "atmospheric_score",
-    ]
-
-    if table_df is None or table_df.empty:
-        st.info("Scoring Feature Table is empty for the current pipeline run.")
-        return
-
-    diagnostic_cols = [c for c in preferred_cols if c in table_df.columns]
-    if not diagnostic_cols:
-        st.warning(
-            "Diagnostic columns were not found in the scored dataframe. "
-            "Showing the first available columns instead."
-        )
-        st.dataframe(table_df.head(max_rows), use_container_width=True)
-        return
-
-    st.dataframe(table_df[diagnostic_cols].head(max_rows), use_container_width=True)
 
 
 def badge_class(label):
@@ -1504,7 +1486,12 @@ elif selected_page == "Sky Conditions":
         st.plotly_chart(_themed_layout(fig_feature, 480), use_container_width=True)
 
     st.subheader("Scoring Feature Table")
-    render_scoring_feature_table(score_df, max_rows=60)
+    diagnostic_cols = [c for c in [
+        "local_dt","stargazing_score","recommendation","cloud_value","transparency_value",
+        "seeing_value","visibility_penalty","transparency_norm","seeing_norm","humidity_quality",
+        "moon_brightness_penalty","effective_darkness","atmospheric_score",
+    ] if c in score_df.columns]
+    st.dataframe(score_df[diagnostic_cols].head(60), use_container_width=True)
 
 
 elif selected_page == "Sky Path":
@@ -1535,44 +1522,104 @@ elif selected_page == "Sky Path":
 
 elif selected_page == "AI Insight":
     st.subheader("AI Insight")
-    st.caption("AI explanation is generated from fixed model outputs. RAG uses a local stargazing knowledge base to improve explanation quality. It does not change the score.")
-    st.markdown(
-        """
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Ask the Stargazing Assistant</h3>
-            <p class="muted">
-                Use this page to ask why a window is recommended, what objects to observe,
-                or how moonlight, clouds, transparency, and city lights affect the result.
-            </p>
-        </div>
-        """, unsafe_allow_html=True,
+    st.caption(
+        "AI/RAG explains the fixed model output and searches the stargazing knowledge base. "
+        "It does not change the score."
     )
-    user_question = st.text_area(
-        "Ask a stargazing question",
-        value="Based on the current forecast, what should I observe and why?",
-        height=110,
+
+    insight_tab, search_tab = st.tabs(
+        ["Forecast AI Insight", "Semantic Knowledge Search"]
     )
-    use_rag = st.checkbox(
-        "Use local stargazing knowledge base",
-        value=True,
-        help="Retrieves explanations about sky darkness, cloud cover, moonlight, seeing, transparency, and data limitations.",
-    )
-    if not include_llm:
-        st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
-    else:
-        col_a, col_b = st.columns([1, 1])
-        with col_a:
-            generate_button = st.button("Generate AI Insight", use_container_width=True, type="primary")
-        with col_b:
-            st.caption("RAG is on" if use_rag else "Standard LLM explanation only")
-        if generate_button:
-            with st.spinner("Generating grounded AI insight..."):
-                answer = cached_generate_rag(result["llm_context"], user_question) if use_rag else cached_generate_llm(result["llm_context"])
-            st.markdown('<div class="rag-box">', unsafe_allow_html=True)
-            st.markdown(answer)
-            st.markdown('</div>', unsafe_allow_html=True)
-        if use_rag and not HAS_RAG_BACKEND:
-            st.warning("RAG UI is ready, but backend.py does not yet have `generate_rag_recommendation()`. Add the backend RAG function next.")
+
+    with insight_tab:
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">
+                    Forecast AI Insight
+                </h3>
+                <p class="muted">
+                    Generate an automatic forecast report from the deterministic scoring output,
+                    top observing windows, daily summary, clustering labels, and retrieved astronomy knowledge.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if not include_llm:
+            st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
+        else:
+            if st.button(
+                "Generate Forecast Insight",
+                use_container_width=True,
+                type="primary",
+            ):
+                with st.spinner("Generating forecast-based AI insight..."):
+                    answer = cached_generate_forecast_insight(result["llm_context"])
+
+                st.markdown('<div class="rag-box">', unsafe_allow_html=True)
+                st.markdown(answer)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            if not HAS_RAG_BACKEND:
+                st.warning(
+                    "AI Insight UI is ready, but backend.py does not yet have the new AI/RAG functions."
+                )
+
+    with search_tab:
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">
+                    Semantic Knowledge Search
+                </h3>
+                <p class="muted">
+                    Ask a question about stargazing, light pollution, moon phase, Bortle scale,
+                    seeing, transparency, or observing tips. The system searches the vector knowledge base
+                    and returns a source-grounded answer.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        user_question = st.text_area(
+            "Ask the knowledge base",
+            value="How do city lights and moon illumination affect stargazing?",
+            height=110,
+        )
+
+        use_forecast_context = st.checkbox(
+            "Use current forecast context",
+            value=True,
+            help=(
+                "If enabled, the answer will connect the retrieved knowledge "
+                "to the current forecast and top observing windows."
+            ),
+        )
+
+        if not include_llm:
+            st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
+        else:
+            if st.button("Search Knowledge Base", use_container_width=True):
+                with st.spinner("Searching vector knowledge base..."):
+                    answer = cached_answer_semantic_question(
+                        user_question,
+                        result["llm_context"],
+                        use_forecast_context,
+                    )
+
+                st.markdown('<div class="rag-box">', unsafe_allow_html=True)
+                st.markdown(answer)
+                st.markdown('</div>', unsafe_allow_html=True)
+
+            if not HAS_RAG_BACKEND:
+                st.warning(
+                    "Semantic Search UI is ready, but backend.py does not yet have "
+                    "`answer_semantic_knowledge_question()`."
+                )
+
 
 
 elif selected_page == "Methodology":
@@ -1621,8 +1668,6 @@ elif selected_page == "Methodology":
 elif selected_page == "Raw Data":
     st.subheader("Raw Data")
     st.caption("These tables are mainly for debugging and transparency.")
-    with st.expander("Scoring Feature Table (Diagnostic View)", expanded=True):
-        render_scoring_feature_table(score_df, max_rows=120)
     with st.expander("Generated Master DataFrame"):
         st.dataframe(master_df, use_container_width=True)
     with st.expander("Scored DataFrame"):

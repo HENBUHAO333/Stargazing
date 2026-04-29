@@ -9,6 +9,7 @@ import requests
 from dotenv import load_dotenv
 
 from rag_utils import retrieve_context, format_retrieved_context
+from rag_vector_utils import retrieve_vector_context, format_vector_context
 
 load_dotenv()
 
@@ -1430,81 +1431,197 @@ Mention clearly if fallback data sources were used.
         return f"LLM explanation failed: {e}"
 
 
-def generate_rag_recommendation(context: Dict, user_question: str = "") -> str:
+def _dedupe_sources(retrieved_items) -> list:
     """
-    RAG-enhanced AI insight.
+    Extract unique source file names from retrieved RAG chunks.
+    """
+    sources = []
 
-    This function retrieves local stargazing knowledge and combines it with
-    the fixed model output. It does not recompute or modify the score.
+    for item in retrieved_items or []:
+        source = item.get("source") if isinstance(item, dict) else None
+        if source and source not in sources:
+            sources.append(source)
+
+    return sources
+
+
+def _format_sources(sources: list) -> str:
+    if not sources:
+        return "No retrieved source metadata available."
+
+    return "\n".join([f"- {source}" for source in sources])
+
+
+def _retrieve_stargazing_knowledge(query: str, top_k: int = 5) -> Tuple[str, str, str]:
+    """
+    Retrieve knowledge for AI/RAG.
+
+    Priority:
+    1. FAISS vector retrieval from vector_store/
+    2. Keyword fallback retrieval from data/knowledge/
+
+    Returns:
+    - retrieved_context: formatted text block for LLM
+    - rag_mode: retrieval mode description
+    - retrieved_sources_text: bullet list of source names
+    """
+
+    try:
+        retrieved = retrieve_vector_context(query, top_k=top_k)
+        retrieved_context = format_vector_context(retrieved)
+        rag_mode = "FAISS vector retrieval"
+
+    except Exception as retrieval_error:
+        retrieved = retrieve_context(query, top_k=min(top_k, 4))
+        retrieved_context = format_retrieved_context(retrieved)
+        rag_mode = (
+            "Keyword fallback retrieval. "
+            f"Vector retrieval failed because: {retrieval_error}"
+        )
+
+    sources = _dedupe_sources(retrieved)
+    retrieved_sources_text = _format_sources(sources)
+
+    return retrieved_context, rag_mode, retrieved_sources_text
+
+
+def _compact_context_for_ai(context: Dict) -> Dict:
+    """
+    Keep AI context compact and structured.
+
+    Do not send raw full dataframes to the LLM. The pipeline already turns
+    score_df into top_windows and daily_summary. This function keeps the
+    explanation grounded while avoiding unnecessary tokens.
+    """
+
+    if not isinstance(context, dict):
+        return {}
+
+    compact = {
+        "city": context.get("city"),
+        "lat": context.get("lat"),
+        "lon": context.get("lon"),
+        "timezone": context.get("timezone"),
+        "weather_source": context.get("weather_source"),
+        "astronomy_source": context.get("astronomy_source"),
+        "top_windows": context.get("top_windows", [])[:5]
+        if isinstance(context.get("top_windows", []), list)
+        else [],
+        "daily_summary": context.get("daily_summary", [])
+        if isinstance(context.get("daily_summary", []), list)
+        else [],
+    }
+
+    return compact
+
+
+def generate_forecast_ai_insight(context: Dict) -> str:
+    """
+    Generate an automatic forecast-based AI insight.
+
+    This is different from user Q&A:
+    - No user question is required.
+    - It explains the current forecast, top windows, limiting factors,
+      and what users should observe.
+    - It uses vector RAG only as an explanation layer.
+    - It does not modify or recalculate the deterministic score.
     """
 
     if not OPENAI_API_KEY:
-        return "RAG AI explanation unavailable because OPENAI_API_KEY is not set."
+        return "Forecast AI insight unavailable because OPENAI_API_KEY is not set."
 
     try:
         from openai import OpenAI
 
         client = OpenAI(api_key=OPENAI_API_KEY)
 
-        city = context.get("city", "the selected location")
+        compact_context = _compact_context_for_ai(context)
 
-        retrieval_query = user_question.strip()
+        city = compact_context.get("city", "the selected location")
+        top_windows = compact_context.get("top_windows", [])
+        daily_summary = compact_context.get("daily_summary", [])
+        weather_source = compact_context.get("weather_source", "Unknown")
+        astronomy_source = compact_context.get("astronomy_source", "Unknown")
 
-        if not retrieval_query:
-            retrieval_query = (
-                f"Explain stargazing conditions for {city}. "
-                f"Include sky darkness, moon illumination, cloud cover, "
-                f"seeing, transparency, and observing recommendations."
-            )
+        retrieval_query = f"""
+Generate a stargazing forecast explanation for {city}.
 
-        retrieved = retrieve_context(retrieval_query, top_k=4)
-        retrieved_context = format_retrieved_context(retrieved)
+Current forecast facts:
+Weather source: {weather_source}
+Astronomy source: {astronomy_source}
+Top observing windows: {json.dumps(top_windows, default=str)}
+Daily summary: {json.dumps(daily_summary, default=str)}
+
+Relevant concepts:
+light pollution, Bortle scale, city lights, sky darkness, moon illumination,
+moon phase, cloud cover, transparency, seeing, dark adaptation, urban stargazing,
+what to observe under poor, hazy, moonlit, cloudy, or dark conditions.
+"""
+
+        retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
+            retrieval_query,
+            top_k=5,
+        )
 
         prompt = f"""
-You are a stargazing recommendation assistant.
+You are a stargazing forecast assistant.
 
-Use two sources of information:
-1. Fixed model output from the app.
-2. Retrieved stargazing knowledge context.
+Task:
+Generate an automatic AI insight report for the current forecast.
 
-Rules:
+Use:
+1. Fixed deterministic model output from the app.
+2. Retrieved stargazing knowledge from the RAG knowledge base.
+
+Core rules:
 - Do not recalculate the score.
-- Do not change the recommendation label.
+- Do not change recommendation labels.
 - Do not invent weather values.
-- Do not claim that a specific star, planet, constellation, or deep-sky object is visible unless it appears in the fixed model output or retrieved context.
-- If giving object suggestions, keep them general: Moon, bright planets, bright stars, star clusters, galaxies, nebulae, Milky Way.
-- Use the retrieved context to explain the model output in user-friendly language.
+- Do not add units unless those units are explicitly present in the fixed model output or retrieved context.
+- Do not say a data source does not provide a variable unless this is explicitly stated in the fixed model output or retrieved context.
+- If a value is missing from the AI context, say the value was not included in the provided context.
+- Do not list clouds, haze, transparency, seeing, city lights, or light pollution as observing targets.
+- Observing targets should only be sky objects, such as the Moon, bright planets, bright stars, star clusters, galaxies, nebulae, or the Milky Way.
+- Do not claim that a specific star, planet, constellation, or deep-sky object is visible tonight unless it appears in the fixed model output or retrieved context.
+- If moon illumination appears as a fallback/default value, describe it cautiously.
 - If fallback data sources were used, mention that the result is less precise.
-- Format the answer in clear markdown with headings and bullet points.
+- AI/RAG only explains the score; it does not modify it.
+- Use clear markdown with headings and bullet points.
 
 Fixed model output:
-{json.dumps(context, default=str, indent=2)}
+{json.dumps(compact_context, default=str, indent=2)}
+
+RAG retrieval mode:
+{rag_mode}
+
+Retrieved source names:
+{retrieved_sources_text}
 
 Retrieved knowledge context:
 {retrieved_context}
 
-User question:
-{user_question if user_question else "Give a practical stargazing recommendation."}
-
 Write the answer in this markdown format:
 
 ## Overall Outlook
-Briefly summarize the forecast quality.
+Briefly summarize the forecast quality using the fixed model output.
 
 ## Best Viewing Windows
-List the best windows from the model output.
+List the best windows from the model output. Include score and recommendation label when available.
 
-## Why Conditions Are Good or Limited
-Explain the main factors: cloud cover, transparency, seeing, moon illumination, darkness, and city lights.
+## Main Limiting Factors
+Explain the main limiting factors: cloud cover, transparency, seeing, moon illumination, darkness, and city lights. Be careful with fallback/default values.
 
 ## What to Observe
-Give general observing suggestions only.
+Give general sky-object suggestions only.
 
 ## Practical Advice
-Give user-friendly planning advice.
+Give user-friendly planning advice. Recommend using the app's score chart and heatmap when choosing a time.
 
 ## Data Limitations
-Mention fallback or approximation limits if relevant.
+Mention fallback or approximation limits if relevant. Also state that AI/RAG explains the score but does not modify it.
+
+## Retrieved Sources
+{retrieved_sources_text}
 """
 
         response = client.responses.create(
@@ -1515,8 +1632,135 @@ Mention fallback or approximation limits if relevant.
         return response.output_text
 
     except Exception as e:
-        return f"RAG recommendation failed: {e}"
-        
+        return f"Forecast AI insight failed: {e}"
+
+
+def answer_semantic_knowledge_question(
+    user_question: str,
+    context: Optional[Dict] = None,
+    use_forecast_context: bool = True,
+) -> str:
+    """
+    Semantic knowledge search / Q&A.
+
+    User types a question. The system performs semantic search over the
+    FAISS vector knowledge base and generates a grounded answer.
+
+    If use_forecast_context is True, the current forecast context is added
+    so the answer can connect general knowledge to the current location and score.
+    """
+
+    if not OPENAI_API_KEY:
+        return "Semantic knowledge answer unavailable because OPENAI_API_KEY is not set."
+
+    if not user_question or not user_question.strip():
+        return "Please enter a stargazing question."
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        user_question_clean = user_question.strip()
+        compact_context = _compact_context_for_ai(context or {})
+
+        retrieval_query = user_question_clean
+
+        if use_forecast_context and compact_context:
+            retrieval_query = f"""
+User question:
+{user_question_clean}
+
+Current forecast context:
+{json.dumps(compact_context, default=str)}
+
+Relevant concepts:
+stargazing, city lights, light pollution, Bortle scale, moon illumination,
+moon phase, cloud cover, transparency, seeing, dark sky, observing tips.
+"""
+
+        retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
+            retrieval_query,
+            top_k=5,
+        )
+
+        forecast_block = ""
+        if use_forecast_context and compact_context:
+            forecast_block = f"""
+Current forecast context:
+{json.dumps(compact_context, default=str, indent=2)}
+"""
+
+        prompt = f"""
+You are a stargazing knowledge assistant.
+
+Answer the user's question using retrieved knowledge.
+If forecast context is provided, connect the answer to the current forecast.
+If the retrieved context does not answer the question, say so.
+
+Rules:
+- Do not recalculate the app's score.
+- Do not change recommendation labels.
+- Do not invent forecast values.
+- Do not add units unless they are present in the provided context.
+- Do not list clouds, haze, transparency, seeing, city lights, or light pollution as observing targets.
+- Observing targets should only be sky objects.
+- Do not claim exact visibility of specific objects unless supported by the context.
+- Keep the answer practical and user-friendly.
+- Use markdown.
+- Include retrieved source names at the end.
+
+User question:
+{user_question_clean}
+
+{forecast_block}
+
+RAG retrieval mode:
+{rag_mode}
+
+Retrieved knowledge context:
+{retrieved_context}
+
+Write the answer in markdown.
+
+End with:
+
+## Retrieved Sources
+{retrieved_sources_text}
+"""
+
+        response = client.responses.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            input=prompt,
+        )
+
+        return response.output_text
+
+    except Exception as e:
+        return f"Semantic knowledge answer failed: {e}"
+
+
+def generate_rag_recommendation(context: Dict, user_question: str = "") -> str:
+    """
+    Backward-compatible wrapper for older app.py versions.
+
+    The new app.py uses:
+    - generate_forecast_ai_insight()
+    - answer_semantic_knowledge_question()
+
+    This wrapper keeps old UI code from breaking.
+    """
+
+    if user_question and user_question.strip():
+        return answer_semantic_knowledge_question(
+            user_question=user_question,
+            context=context,
+            use_forecast_context=True,
+        )
+
+    return generate_forecast_ai_insight(context)
+
+
 # ============================================================
 # MAIN PIPELINE
 # ============================================================

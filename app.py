@@ -973,6 +973,43 @@ st.markdown(
         color: #cfe5ff;
         line-height: 1.5;
     }
+    .phenomena-card {
+        background: rgba(14, 12, 28, 0.9);
+        border: 1px solid rgba(196, 120, 210, 0.24);
+        border-radius: 12px;
+        padding: 12px 14px;
+        margin: 10px 0;
+        box-shadow: 0 0 0 1px rgba(196,120,210,0.08) inset;
+    }
+    .phenomena-title {
+        margin: 0 0 5px 0;
+        color: #efe6ff;
+        font-size: 15px;
+        font-weight: 700;
+        font-family: 'DM Sans', system-ui, sans-serif;
+    }
+    .phenomena-meta {
+        margin: 0;
+        color: #b8afd0;
+        font-size: 13px;
+        line-height: 1.45;
+    }
+    .phenomena-why {
+        margin: 7px 0 0 0;
+        color: #d3ccf0;
+        font-size: 13px;
+        line-height: 1.5;
+    }
+    .phenomena-score-pill {
+        display: inline-block;
+        margin-left: 8px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 11px;
+        font-weight: 600;
+        color: #2a0f3a;
+        background: linear-gradient(90deg, #fbbf24 0%, #f6d98f 100%);
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -1040,11 +1077,10 @@ selected_page = st.sidebar.radio(
     [
         "All Sections",
         "Overview",
-        "Forecast Timeline",
-        "Observing Timeline",
         "Best Windows",
         "Sky Conditions",
         "Sky Path",
+        "Celestial Phenomena",
         "AI Insight",
         "Glossary",
         "Methodology",
@@ -1104,7 +1140,7 @@ include_tad = st.sidebar.checkbox(
 include_positions = st.sidebar.checkbox(
     "Use Sun/Moon position data",
     value=False,
-    help="Used for Sky Path visualization and position table only. This does not affect the score.",
+    help="Used for Sky Path and Celestial Phenomena guidance only. This does not affect the score.",
 )
 
 include_llm = st.sidebar.checkbox(
@@ -1318,6 +1354,235 @@ def labels_for(*names: str) -> dict:
     return {name: human_label(name) for name in names}
 
 
+def _azimuth_to_direction(azimuth: float) -> str:
+    if azimuth is None or pd.isna(azimuth):
+        return "Unknown"
+    az = float(azimuth) % 360.0
+    compass = [
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    ]
+    idx = int((az + 11.25) // 22.5) % len(compass)
+    return compass[idx]
+
+
+def _nearest_score_snapshot(score_lookup: pd.DataFrame, target_dt: pd.Timestamp) -> tuple:
+    if score_lookup is None or score_lookup.empty or pd.isna(target_dt):
+        return 50.0, False, "Unknown"
+    score_times = pd.to_datetime(score_lookup["local_dt"], errors="coerce")
+    if hasattr(score_times.dt, "tz") and score_times.dt.tz is not None:
+        score_times = score_times.dt.tz_localize(None)
+
+    target_ts = pd.to_datetime(target_dt, errors="coerce")
+    if pd.isna(target_ts):
+        return 50.0, False, "Unknown"
+    if getattr(target_ts, "tzinfo", None) is not None:
+        target_ts = target_ts.tz_localize(None)
+
+    deltas = (score_times - target_ts).abs()
+    idx = deltas.idxmin()
+    row = score_lookup.loc[idx]
+    return (
+        safe_numeric(row.get("stargazing_score"), 50.0) or 50.0,
+        bool(row.get("is_dark_enough", False)),
+        str(row.get("recommendation", "Unknown")),
+    )
+
+
+def build_celestial_recommendations(
+    score_df: pd.DataFrame,
+    event_df: pd.DataFrame,
+    position_df: pd.DataFrame,
+    latitude: float,
+    timezone_name: str,
+    top_n: int = 5,
+) -> pd.DataFrame:
+    if score_df is None or score_df.empty:
+        return pd.DataFrame()
+
+    score_lookup = score_df.copy()
+    score_lookup["local_dt"] = pd.to_datetime(score_lookup["local_dt"], errors="coerce")
+    score_lookup = score_lookup.dropna(subset=["local_dt"]).reset_index(drop=True)
+    if score_lookup.empty:
+        return pd.DataFrame()
+
+    candidates = []
+
+    if position_df is not None and not position_df.empty and "UTC Time" in position_df.columns:
+        pos = position_df.copy()
+        pos["utc_dt"] = pd.to_datetime(pos["UTC Time"], utc=True, errors="coerce")
+        pos = pos.dropna(subset=["utc_dt"])
+        if timezone_name:
+            pos["local_dt"] = pos["utc_dt"].dt.tz_convert(timezone_name).dt.tz_localize(None)
+        else:
+            pos["local_dt"] = pos["utc_dt"].dt.tz_localize(None)
+
+        if "Object" in pos.columns:
+            moon_rows = pos[pos["Object"].astype(str).str.lower() == "moon"].copy()
+        else:
+            moon_rows = pd.DataFrame()
+        for _, row in moon_rows.iterrows():
+            altitude = safe_numeric(row.get("Altitude (°)"), None)
+            azimuth = safe_numeric(row.get("Azimuth (°)"), None)
+            if altitude is None or azimuth is None or altitude < 8:
+                continue
+
+            score_value, dark_enough, score_label = _nearest_score_snapshot(
+                score_lookup, row.get("local_dt")
+            )
+            illumination = safe_numeric(row.get("Illuminated (%)"), 45.0)
+            shape = max(0.0, 1.0 - abs(altitude - 35.0) / 55.0)
+            moonlight_factor = max(0.45, 1.0 - (illumination / 200.0))
+            phenomenon_quality = min(1.0, shape * moonlight_factor + (0.1 if dark_enough else 0.0))
+
+            src = str(row.get("Data Source", "Timeanddate astrodata"))
+            source_weight = 0.82 if "estimated fallback" in src.lower() else 1.0
+            combined = (0.7 * score_value + 30.0 * phenomenon_quality) * source_weight
+
+            candidates.append(
+                {
+                    "phenomenon": "Moon observing window",
+                    "local_time": pd.to_datetime(row.get("local_dt")),
+                    "direction": f"{_azimuth_to_direction(azimuth)} ({azimuth:.0f} deg azimuth)",
+                    "elevation_deg": round(float(altitude), 1),
+                    "score_at_time": round(float(score_value), 1),
+                    "combined_score": round(float(combined), 1),
+                    "score_label": score_label,
+                    "source": src,
+                    "why": (
+                        f"Moon at {altitude:.0f} deg altitude with {illumination:.0f}% illumination. "
+                        f"Weighted with forecast score at this time."
+                    ),
+                }
+            )
+
+    if event_df is not None and not event_df.empty:
+        evt = event_df.copy()
+        if "local_dt_naive" in evt.columns:
+            evt["event_local_dt"] = pd.to_datetime(evt["local_dt_naive"], errors="coerce")
+        else:
+            evt["event_local_dt"] = pd.to_datetime(evt.get("UTC Time"), utc=True, errors="coerce")
+            if timezone_name:
+                evt["event_local_dt"] = (
+                    evt["event_local_dt"].dt.tz_convert(timezone_name).dt.tz_localize(None)
+                )
+            else:
+                evt["event_local_dt"] = evt["event_local_dt"].dt.tz_localize(None)
+        evt = evt.dropna(subset=["event_local_dt"])
+
+        for _, row in evt.iterrows():
+            obj = str(row.get("Object", "Unknown"))
+            event_name = str(row.get("Event", "")).strip()
+            event_key = f"{obj} {event_name}".lower()
+
+            if "nautical" in event_key and "begin" in event_key:
+                phenomenon = "Nautical twilight begins"
+                quality = 0.72
+            elif "nautical" in event_key and "end" in event_key:
+                phenomenon = "Nautical twilight ends"
+                quality = 0.78
+            elif obj.lower() == "moon" and "meridian" in event_key:
+                phenomenon = "Moon at local meridian"
+                quality = 0.82
+            elif obj.lower() == "moon" and "phase" in event_key:
+                phenomenon = "Moon phase event"
+                quality = 0.62
+            else:
+                continue
+
+            score_value, dark_enough, score_label = _nearest_score_snapshot(
+                score_lookup, row["event_local_dt"]
+            )
+            combined = 0.75 * score_value + 25.0 * (quality + (0.08 if dark_enough else 0.0))
+
+            candidates.append(
+                {
+                    "phenomenon": phenomenon,
+                    "local_time": pd.to_datetime(row["event_local_dt"]),
+                    "direction": "See Sky Path for live azimuth",
+                    "elevation_deg": safe_numeric(row.get("Altitude (°)"), None),
+                    "score_at_time": round(float(score_value), 1),
+                    "combined_score": round(float(combined), 1),
+                    "score_label": score_label,
+                    "source": "Timeanddate events",
+                    "why": f"{obj} {event_name} aligned with forecast quality at this time.",
+                }
+            )
+
+    if not candidates:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(candidates)
+    out = out.dropna(subset=["local_time"]).copy()
+    out["time_label"] = out["local_time"].dt.strftime("%b %d, %I:%M %p")
+    out = out.sort_values("combined_score", ascending=False)
+    out = out.drop_duplicates(subset=["phenomenon"], keep="first")
+    out = out.head(top_n).reset_index(drop=True)
+    out["rank"] = out.index + 1
+    return out[
+        [
+            "rank",
+            "phenomenon",
+            "time_label",
+            "direction",
+            "elevation_deg",
+            "score_at_time",
+            "combined_score",
+            "score_label",
+            "source",
+            "why",
+        ]
+    ]
+
+
+def render_celestial_recommendations(reco_df: pd.DataFrame):
+    if reco_df is None or reco_df.empty:
+        st.info("No celestial recommendations available yet. Run pipeline with Timeanddate data enabled.")
+        return
+    st.caption(
+        "Ranking blends live astronomy events/positions with the deterministic stargazing score. "
+        "Higher combined score means better overall recommendation quality."
+    )
+    for _, row in reco_df.iterrows():
+        st.markdown(
+            f"""
+            <div class="phenomena-card">
+                <p class="phenomena-title">
+                    #{int(row['rank'])} {escape(str(row['phenomenon']))}
+                    <span class="phenomena-score-pill">{float(row['combined_score']):.1f}/100</span>
+                </p>
+                <p class="phenomena-meta">
+                    <b>When:</b> {escape(str(row['time_label']))} &nbsp;|&nbsp;
+                    <b>Direction:</b> {escape(str(row['direction']))} &nbsp;|&nbsp;
+                    <b>Score label:</b> {escape(str(row['score_label']))}
+                </p>
+                <p class="phenomena-why">{escape(str(row['why']))}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_celestial_card(rank: int, row: pd.Series):
+    st.markdown(
+        f"""
+        <div class="window-card">
+            <h4 style="margin:0 0 6px 0;color:#efe6ff;font-size:15px;">
+                #{int(rank)} {escape(str(row.get("phenomenon", "Celestial event")))}
+            </h4>
+            <p class="muted" style="margin:0 0 4px 0;">
+                {escape(str(row.get("time_label", "Unknown time")))}
+            </p>
+            <p class="muted" style="margin:0 0 8px 0;">
+                {escape(str(row.get("direction", "Unknown direction")))}
+            </p>
+            <span class="badge badge-good">Combined: {float(safe_numeric(row.get("combined_score"), 0.0) or 0.0):.1f}/100</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 GLOSSARY_TERMS = [
     {"term": "Bortle Scale", "category": "Sky Darkness", "unit": "Index 1-9", "definition": "A scale describing night-sky brightness from dark rural skies (1) to bright city skies (9)."},
     {"term": "Seeing", "category": "Atmospheric Stability", "unit": "Relative quality", "definition": "How steady the atmosphere is. Better seeing produces sharper star and planetary detail."},
@@ -1410,30 +1675,6 @@ def apply_reactive_sky_style(state: str):
     )
 
 
-def render_observing_timeline(score_df: pd.DataFrame):
-    timeline_df = score_df.copy()
-    timeline_df["local_dt"] = pd.to_datetime(timeline_df["local_dt"], errors="coerce")
-    timeline_df = timeline_df.dropna(subset=["local_dt"]).sort_values("local_dt")
-
-    node_html = []
-    for _, row in timeline_df.iterrows():
-        score = safe_numeric(row.get("stargazing_score"), 0) or 0
-        css_class = "chrono-node chrono-node-optimal" if score >= 85 else "chrono-node"
-        node_html.append(
-            f"""
-            <div class="{css_class}">
-              <div><b>{escape(row["local_dt"].strftime("%b %d, %I:%M %p"))}</b></div>
-              <div>Score: {score:.1f}/100</div>
-              <div>Recommendation: {escape(str(row.get("recommendation", "Unknown")))}</div>
-              <div>Sky State: {escape(str(row.get("cluster_label", "Unknown")))}</div>
-            </div>
-            """
-        )
-
-    with st.container(height=700):
-        st.markdown("\n".join(node_html), unsafe_allow_html=True)
-
-
 def render_glossary_panel():
     glossary_df = pd.DataFrame(GLOSSARY_TERMS)
     query = st.text_input("Search glossary terms", placeholder="e.g., Bortle, seeing, transparency")
@@ -1481,26 +1722,6 @@ def render_telemetry_console(telemetry: dict):
 
     st.markdown("### API Payload Preview")
     st.code(json.dumps(previews, indent=2, default=str), language="json")
-
-
-def build_score_heatmap(score_df):
-    heatmap_df = score_df.copy()
-    heatmap_df["local_dt"] = pd.to_datetime(heatmap_df["local_dt"], errors="coerce")
-    heatmap_df = heatmap_df.dropna(subset=["local_dt"])
-    heatmap_df["date_str"] = heatmap_df["local_dt"].dt.strftime("%b %d")
-    heatmap_df["hour"] = heatmap_df["local_dt"].dt.hour
-    pivot = heatmap_df.pivot_table(
-        index="date_str", columns="hour",
-        values="stargazing_score", aggfunc="mean",
-    )
-    fig = px.imshow(
-        pivot, text_auto=".0f", aspect="auto",
-        title="Stargazing Score Heatmap by Date and Hour",
-        labels=dict(x="Hour of Day", y="Date", color="Score"),
-        zmin=0, zmax=100,
-        color_continuous_scale=[[0,"#100d1e"],[0.5,"#6b2f7a"],[1,"#c478d2"]],
-    )
-    return _themed_layout(fig, 440)
 
 
 def build_factor_chart(score_df):
@@ -1716,6 +1937,15 @@ if include_positions:
             st.warning(f"Sun/Moon position visualization unavailable: {e}")
             position_df = pd.DataFrame()
 
+celestial_df = build_celestial_recommendations(
+    score_df=score_df,
+    event_df=event_df,
+    position_df=position_df,
+    latitude=result.get("lat", 0.0),
+    timezone_name=result.get("timezone", timezone or "UTC"),
+    top_n=5,
+)
+
 
 # ============================================================
 # HERO CARD
@@ -1887,35 +2117,20 @@ with st.expander("Overview", expanded=_section_open("Overview")):
     for i, (_, row) in enumerate(top_windows.head(3).iterrows()):
         with cols[i]:
             render_window_card(i + 1, row)
-
-with st.expander("Forecast Timeline", expanded=_section_open("Forecast Timeline")):
-    chart_df = score_df.copy()
-    chart_df["local_dt"] = pd.to_datetime(chart_df["local_dt"], errors="coerce")
-    fig_score = px.line(
-        chart_df, x="local_dt", y="stargazing_score",
-        color="recommendation", markers=True,
-        title="Hourly Stargazing Score Forecast",
-        hover_data=[c for c in [
-            "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-            "is_dark_enough","is_moon_up","visibility_penalty","transparency_norm",
-            "seeing_norm","humidity_quality","moon_brightness_penalty",
-            "effective_darkness","atmospheric_score",
-        ] if c in chart_df.columns],
-        labels=labels_for(
-            "local_dt", "stargazing_score", "recommendation", "cloud_value",
-            "transparency_value", "seeing_value", "moon_illuminated_pct",
-            "is_dark_enough", "is_moon_up", "visibility_penalty", "transparency_norm",
-            "seeing_norm", "humidity_quality", "moon_brightness_penalty",
-            "effective_darkness", "atmospheric_score",
-        ),
-    )
-    fig_score.update_layout(yaxis_range=[0, 100])
-    st.plotly_chart(_themed_layout(fig_score, 560), width="stretch")
-    st.plotly_chart(build_score_heatmap(score_df), width="stretch")
-
-with st.expander("Observing Timeline", expanded=_section_open("Observing Timeline")):
-    st.caption("Node-based timeline of forecast windows. Scores above 85 are highlighted as optimal windows.")
-    render_observing_timeline(score_df)
+    if celestial_df is not None and not celestial_df.empty:
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Top Celestial Phenomena</h3>
+                <p class="muted">Best data-backed celestial opportunities for this forecast.</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        ccols = st.columns(3)
+        for i, (_, row) in enumerate(celestial_df.head(3).iterrows()):
+            with ccols[i]:
+                render_celestial_card(i + 1, row)
 
 with st.expander("Best Windows", expanded=_section_open("Best Windows")):
     cols = st.columns(3)
@@ -2001,6 +2216,9 @@ with st.expander("Sky Path", expanded=_section_open("Sky Path")):
                 st.warning("Position data exists, but altitude/azimuth values are missing.")
         else:
             st.warning("Position data does not contain required columns: Azimuth (°), Altitude (°), Object.")
+
+with st.expander("Celestial Phenomena", expanded=_section_open("Celestial Phenomena")):
+    render_celestial_recommendations(celestial_df)
 
 with st.expander("AI Insight", expanded=_section_open("AI Insight")):
     st.caption(

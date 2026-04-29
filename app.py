@@ -1,4 +1,6 @@
+import json
 import random
+from html import escape
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -574,6 +576,7 @@ st.markdown(
         display: flex;
         align-items: center;
         gap: 20px;
+        position: relative;
     }
     .hero-icon-wrap {
         width: 52px; height: 52px;
@@ -591,15 +594,117 @@ st.markdown(
         font-family: 'DM Serif Display', Georgia, serif !important;
         font-size: 2rem;
         font-weight: 400 !important;
-        color: var(--text);
+        color: #f5f0ff;
         line-height: 1.15;
+        letter-spacing: -0.01em;
+        text-shadow: 0 0 14px rgba(196,120,210,0.22), 0 0 2px rgba(255,255,255,0.2);
     }
     .hero-desc {
         margin: 0;
-        color: var(--text-muted);
-        font-size: 13px;
-        line-height: 1.67;
+        color: #b4aacb;
+        font-size: 15px;
+        line-height: 1.6;
         max-width: 680px;
+        text-shadow: 0 0 10px rgba(0,0,0,0.25);
+    }
+    .hero-copy {
+        position: relative;
+        padding-right: 40px;
+    }
+    .hero-sparkles {
+        position: absolute;
+        top: -6px;
+        right: -95px;
+        left: auto;
+        width: 220px;
+        height: 145px;
+        pointer-events: none;
+    }
+    .hero-const-label {
+        position: absolute;
+        color: rgba(255, 248, 220, 0.9);
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.03em;
+        text-shadow: 0 0 6px rgba(255, 244, 196, 0.35);
+        white-space: nowrap;
+    }
+    .hero-const-label.ursa { left: 40px; top: 25px; }
+    .hero-const-label.polaris { right: 0px; top: 4px; }
+    .hero-const-label.plough { left: 58px; top: 126px; }
+    .hero-const-line {
+        position: absolute;
+        height: 1.2px;
+        background: linear-gradient(90deg, rgba(255,245,190,0.08), rgba(255,245,190,0.28), rgba(255,245,190,0.08));
+        transform-origin: left center;
+        filter: drop-shadow(0 0 3px rgba(255,244,180,0.22));
+    }
+    .hero-const-line.l1  { left: 33px;  top: 72px;  width: 22px; transform: rotate(10deg); }
+    .hero-const-line.l2  { left: 55px;  top: 75px;  width: 24px; transform: rotate(23deg); }
+    .hero-const-line.l3  { left: 77px;  top: 85px;  width: 26px; transform: rotate(31deg); }
+    .hero-const-line.l4  { left: 99px;  top: 98px;  width: 17px; transform: rotate(130deg); }
+    .hero-const-line.l5  { left: 88px;  top: 111px; width: 33px; transform: rotate(-7deg); }
+    .hero-const-line.l6  { left: 121px; top: 107px; width: 19px; transform: rotate(-55deg); }
+    .hero-const-line.l7  { left: 132px; top: 91px;  width: 79px; transform: rotate(-57deg); }
+    .hero-const-line.l8  { left: 110px; top: 39px;  width: 13px; transform: rotate(-31deg); }
+    .hero-const-line.l9  { left: 99px;  top: 46px;  width: 13px; transform: rotate(-31deg); }
+    .hero-const-line.l10 { left: 99px;  top: 46px;  width: 34px; transform: rotate(-11deg); }
+    .hero-const-line.l11 { left: 132px; top: 39px;  width: 22px; transform: rotate(-7deg); }
+    .hero-const-line.l12 { left: 154px; top: 36px;  width: 12px; transform: rotate(-20deg); }
+    .hero-const-line.l13 { left: 165px; top: 33px;  width: 13px; transform: rotate(-31deg); }
+    .hero-sparkle {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: linear-gradient(180deg, #fffde6 0%, #f8e7a5 60%, #e7c86e 100%);
+        clip-path: polygon(
+            50% 0%, 58% 32%, 88% 12%, 68% 45%, 100% 50%,
+            68% 55%, 88% 88%, 58% 68%, 50% 100%, 42% 68%,
+            12% 88%, 32% 55%, 0% 50%, 32% 45%, 12% 12%, 42% 32%
+        );
+        box-shadow: 0 0 8px rgba(255,235,150,0.72);
+        animation: starShimmer 2s ease-in-out infinite;
+    }
+    .hero-sparkle::after {
+        content: "";
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(255,255,240,0.22) 0%, rgba(255,255,240,0) 70%);
+        transform: translate(-50%, -50%);
+        pointer-events: none;
+    }
+    .hero-sparkle.s1  { left: 33px;  top: 72px;  animation-delay: 0.0s; }
+    .hero-sparkle.s2  { left: 55px;  top: 75px;  animation-delay: 0.2s; }
+    .hero-sparkle.s3  { left: 77px;  top: 85px;  animation-delay: 0.4s; }
+    .hero-sparkle.s4  { left: 99px;  top: 98px;  animation-delay: 0.6s; }
+    .hero-sparkle.s5  { left: 88px;  top: 111px; animation-delay: 0.8s; }
+    .hero-sparkle.s6  { left: 121px; top: 107px; animation-delay: 1.0s; }
+    .hero-sparkle.s7  { left: 132px; top: 91px;  animation-delay: 1.2s; }
+    .hero-sparkle.s9  { left: 121px; top: 33px;  animation-delay: 0.15s; transform: scale(0.9); }
+    .hero-sparkle.s10 { left: 110px; top: 39px;  animation-delay: 0.35s; transform: scale(0.9); }
+    .hero-sparkle.s11 { left: 99px;  top: 46px;  animation-delay: 0.55s; transform: scale(0.9); }
+    .hero-sparkle.s12 { left: 132px; top: 39px;  animation-delay: 0.75s; transform: scale(0.88); }
+    .hero-sparkle.s13 { left: 154px; top: 36px;  animation-delay: 0.95s; transform: scale(0.88); }
+    .hero-sparkle.s14 { left: 165px; top: 33px;  animation-delay: 1.15s; transform: scale(0.88); }
+    .hero-sparkle.s8 {
+        left: 176px;
+        top: 26px;
+        width: 12px;
+        height: 12px;
+        background: #fffde8;
+        box-shadow: 0 0 16px rgba(255,246,190,1);
+        animation-delay: 1.35s;
+    }
+    @keyframes starShimmer {
+        0%, 100% { opacity: 0.45; transform: scale(0.9); }
+        50% { opacity: 1; transform: scale(1.2); }
+    }
+    @media (max-width: 1280px) {
+        .hero-sparkles { right: -170px; transform: scale(0.9); transform-origin: top right; }
     }
     .score-badge {
         display: flex;
@@ -795,6 +900,79 @@ st.markdown(
         display: inline-block;
         font-family: 'DM Sans', system-ui, sans-serif;
     }
+    .inline-cell {
+        background: rgba(10, 10, 24, 0.82);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px 12px;
+        margin: 8px 0;
+    }
+    .status-text {
+        color: #7ee0a3;
+        font-size: 14px;
+        font-weight: 500;
+        margin: 0;
+        font-family: 'DM Sans', system-ui, sans-serif;
+    }
+    .reactive-star-field {
+        transition: opacity 0.6s ease;
+        opacity: var(--star-opacity, 0.72);
+    }
+    .reactive-clouds-overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+        opacity: var(--cloud-opacity, 0);
+        background:
+          radial-gradient(circle at 20% 20%, rgba(255,255,255,0.07), rgba(255,255,255,0) 45%),
+          radial-gradient(circle at 70% 35%, rgba(255,255,255,0.06), rgba(255,255,255,0) 55%),
+          radial-gradient(circle at 45% 80%, rgba(255,255,255,0.05), rgba(255,255,255,0) 50%);
+        animation: cloudDrift 24s linear infinite;
+    }
+    @keyframes cloudDrift {
+        0%   { transform: translateX(-2%); }
+        50%  { transform: translateX(2%); }
+        100% { transform: translateX(-2%); }
+    }
+    .chrono-node {
+        position: relative;
+        margin: 0 0 14px 22px;
+        padding: 12px 14px;
+        border: 1px solid rgba(196,120,210,0.2);
+        border-radius: 10px;
+        background: rgba(16,13,30,0.62);
+    }
+    .chrono-node::before {
+        content: "";
+        position: absolute;
+        left: -21px;
+        top: 16px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: rgba(196,120,210,0.8);
+        box-shadow: 0 0 0 3px rgba(196,120,210,0.18);
+    }
+    .chrono-node-optimal {
+        border-color: rgba(251,191,36,0.55);
+        box-shadow: 0 0 0 1px rgba(251,191,36,0.25), 0 0 16px rgba(251,191,36,0.25);
+    }
+    .chrono-node-optimal::before {
+        background: #fbbf24;
+        box-shadow: 0 0 0 3px rgba(251,191,36,0.25), 0 0 14px rgba(251,191,36,0.6);
+    }
+    .telemetry-console {
+        background: #070511;
+        border: 1px solid rgba(120,119,198,0.35);
+        border-radius: 10px;
+        padding: 14px;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 12px;
+        color: #cfe5ff;
+        line-height: 1.5;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -832,12 +1010,13 @@ def _star_field(n: int = 140) -> str:
 
 st.markdown(
     f"""
-    <svg xmlns="http://www.w3.org/2000/svg"
+    <svg class="reactive-star-field" xmlns="http://www.w3.org/2000/svg"
          style="position:fixed;top:0;left:0;width:100vw;height:100vh;
                 pointer-events:none;z-index:0;"
          preserveAspectRatio="xMidYMid slice">
     {_star_field()}
     </svg>
+    <div class="reactive-clouds-overlay"></div>
     """,
     unsafe_allow_html=True,
 )
@@ -859,14 +1038,17 @@ st.sidebar.markdown(
 selected_page = st.sidebar.radio(
     "Navigation",
     [
-        "Dashboard",
+        "All Sections",
+        "Overview",
         "Forecast Timeline",
+        "Observing Timeline",
         "Best Windows",
         "Sky Conditions",
         "Sky Path",
         "AI Insight",
+        "Glossary",
         "Methodology",
-        "Raw Data",
+        "Telemetry",
     ],
     label_visibility="collapsed",
 )
@@ -922,7 +1104,7 @@ include_tad = st.sidebar.checkbox(
 include_positions = st.sidebar.checkbox(
     "Use Sun/Moon position data",
     value=False,
-    help="Only used for Sky Path visualization. This does not affect the score.",
+    help="Used for Sky Path visualization and position table only. This does not affect the score.",
 )
 
 include_llm = st.sidebar.checkbox(
@@ -931,9 +1113,9 @@ include_llm = st.sidebar.checkbox(
     help="Only explains fixed model output. This does not affect the score.",
 )
 
-run_button = st.sidebar.button("▶  Run Pipeline", use_container_width=True, type="primary")
+run_button = st.sidebar.button("▶  Run Pipeline", width="stretch", type="primary")
 
-if st.sidebar.button("Clear cached data", use_container_width=True):
+if st.sidebar.button("Clear cached data", width="stretch"):
     st.cache_data.clear()
     st.session_state.pop("pipeline_result", None)
     st.session_state.pop("pipeline_bortle", None)
@@ -959,8 +1141,8 @@ def cached_run_pipeline(city_name, lat, lon, timezone, days, bortle_index, inclu
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def cached_fetch_positions(lat, lon):
-    return fetch_tad_positions(lat=lat, lon=lon)
+def cached_fetch_positions(lat, lon, timezone, days):
+    return fetch_tad_positions(lat=lat, lon=lon, timezone=timezone, days=days)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1071,7 +1253,7 @@ def display_empty_result_debug(score_df, top_windows):
             "humidity_quality","moon_brightness_penalty","effective_darkness","atmospheric_score",
         ] if c in score_df.columns]
         st.subheader("First 30 scored rows")
-        st.dataframe(score_df[debug_cols].head(30), use_container_width=True)
+        st.dataframe(score_df[debug_cols].head(30), width="stretch")
         if "stargazing_score" in score_df.columns:
             st.subheader("Score summary")
             st.write(score_df["stargazing_score"].describe())
@@ -1134,6 +1316,171 @@ def human_label(name: str) -> str:
 
 def labels_for(*names: str) -> dict:
     return {name: human_label(name) for name in names}
+
+
+GLOSSARY_TERMS = [
+    {"term": "Bortle Scale", "category": "Sky Darkness", "unit": "Index 1-9", "definition": "A scale describing night-sky brightness from dark rural skies (1) to bright city skies (9)."},
+    {"term": "Seeing", "category": "Atmospheric Stability", "unit": "Relative quality", "definition": "How steady the atmosphere is. Better seeing produces sharper star and planetary detail."},
+    {"term": "Transparency", "category": "Atmospheric Clarity", "unit": "Relative quality", "definition": "How clear the atmosphere is. Better transparency improves visibility of faint deep-sky objects."},
+    {"term": "Cloud Cover", "category": "Weather", "unit": "%", "definition": "Fraction of sky covered by clouds. High cloud cover strongly reduces stargazing quality."},
+    {"term": "Moon Illumination", "category": "Moonlight", "unit": "%", "definition": "The illuminated fraction of the Moon's disk. Higher illumination usually brightens the sky background."},
+    {"term": "Effective Darkness", "category": "Composite Metric", "unit": "0-1", "definition": "A darkness metric combining light pollution and moonlight penalty effects."},
+    {"term": "Atmospheric Score", "category": "Composite Metric", "unit": "0-1", "definition": "Weighted score derived from transparency, seeing, and humidity quality."},
+    {"term": "Visibility Penalty", "category": "Scoring Constraint", "unit": "Multiplier", "definition": "A hard penalty applied when cloud cover is high or the sky is not dark enough."},
+    {"term": "Zenith", "category": "Celestial Geometry", "unit": "Direction", "definition": "The point in the sky directly overhead at the observer's location."},
+    {"term": "Azimuth", "category": "Coordinate System", "unit": "Degrees", "definition": "Horizontal direction around the horizon measured in degrees."},
+    {"term": "Altitude", "category": "Coordinate System", "unit": "Degrees", "definition": "Angular height of an object above the horizon."},
+    {"term": "Nautical Twilight", "category": "Twilight Phase", "unit": "Time Window", "definition": "Solar depression between 6 and 12 degrees below the horizon; brighter than full astronomical darkness."},
+]
+
+
+def infer_reactive_sky_state(score_df: pd.DataFrame, top_windows: pd.DataFrame) -> str:
+    # Demo mode: keep a single, fixed background style.
+    return "neutral"
+
+
+def apply_reactive_sky_style(state: str):
+    style_map = {
+        "overcast": {
+            "bg": "#0b0a16",
+            "star_opacity": "0.18",
+            "cloud_opacity": "0.85",
+            "glare": "none",
+        },
+        "moonlit": {
+            "bg": "#090614",
+            "star_opacity": "0.38",
+            "cloud_opacity": "0.2",
+            "glare": "radial-gradient(circle at 55% 18%, rgba(255,255,255,0.22), rgba(255,255,255,0) 32%)",
+        },
+        "clear_dark": {
+            "bg": "#05030a",
+            "star_opacity": "0.95",
+            "cloud_opacity": "0.0",
+            "glare": "none",
+        },
+        "neutral": {
+            "bg": "#090614",
+            "star_opacity": "0.72",
+            "cloud_opacity": "0.0",
+            "glare": "none",
+        },
+    }
+    cfg = style_map.get(state, style_map["neutral"])
+    state_bg = cfg["bg"]
+    st.markdown(
+        f"""
+        <style>
+        :root {{
+            --bg: {cfg["bg"]};
+            --star-opacity: {cfg["star_opacity"]};
+            --cloud-opacity: {cfg["cloud_opacity"]};
+        }}
+        .stApp,
+        [data-testid="stAppViewContainer"],
+        [data-testid="stMain"] {{
+            background-color: {state_bg} !important;
+            background-image: none !important;
+        }}
+        [data-testid="stAppViewContainer"]::before {{
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
+            background: rgba(6, 6, 16, 0.42);
+        }}
+        .hero-card,
+        .section-card,
+        .metric-card,
+        .window-card {{
+            background: rgba(10, 10, 24, 0.76) !important;
+        }}
+        .hero-title,
+        .hero-desc,
+        .muted,
+        .metric-card-title,
+        .metric-large,
+        .metric-unit {{
+            opacity: 1 !important;
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_observing_timeline(score_df: pd.DataFrame):
+    timeline_df = score_df.copy()
+    timeline_df["local_dt"] = pd.to_datetime(timeline_df["local_dt"], errors="coerce")
+    timeline_df = timeline_df.dropna(subset=["local_dt"]).sort_values("local_dt")
+
+    node_html = []
+    for _, row in timeline_df.iterrows():
+        score = safe_numeric(row.get("stargazing_score"), 0) or 0
+        css_class = "chrono-node chrono-node-optimal" if score >= 85 else "chrono-node"
+        node_html.append(
+            f"""
+            <div class="{css_class}">
+              <div><b>{escape(row["local_dt"].strftime("%b %d, %I:%M %p"))}</b></div>
+              <div>Score: {score:.1f}/100</div>
+              <div>Recommendation: {escape(str(row.get("recommendation", "Unknown")))}</div>
+              <div>Sky State: {escape(str(row.get("cluster_label", "Unknown")))}</div>
+            </div>
+            """
+        )
+
+    with st.container(height=700):
+        st.markdown("\n".join(node_html), unsafe_allow_html=True)
+
+
+def render_glossary_panel():
+    glossary_df = pd.DataFrame(GLOSSARY_TERMS)
+    query = st.text_input("Search glossary terms", placeholder="e.g., Bortle, seeing, transparency")
+    if query:
+        q = query.strip().lower()
+        glossary_df = glossary_df[
+            glossary_df.apply(
+                lambda r: q in str(r["term"]).lower()
+                or q in str(r["definition"]).lower()
+                or q in str(r["category"]).lower(),
+                axis=1,
+            )
+        ]
+
+    with st.container(height=800):
+        if glossary_df.empty:
+            st.info("No glossary entries matched your search.")
+            return
+        for _, row in glossary_df.iterrows():
+            with st.expander(f"🛰️ {row['term']}"):
+                st.markdown(
+                    f"**Category:** {row['category']}  \n"
+                    f"**Unit / Type:** {row['unit']}  \n\n"
+                    f"{row['definition']}"
+                )
+
+
+def render_telemetry_console(telemetry: dict):
+    logs = telemetry.get("logs", []) if isinstance(telemetry, dict) else []
+    pipeline = telemetry.get("pipeline", {}) if isinstance(telemetry, dict) else {}
+    scoring_model = telemetry.get("scoring_model", {}) if isinstance(telemetry, dict) else {}
+    previews = telemetry.get("api_preview", {}) if isinstance(telemetry, dict) else {}
+
+    st.markdown("### Live Pipeline Logs")
+    st.markdown(
+        f'<div class="telemetry-console">{escape(chr(10).join(logs) if logs else "No telemetry logs available.")}</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Pipeline Summary")
+    st.code(json.dumps(pipeline, indent=2, default=str), language="json")
+
+    st.markdown("### Scoring Model Weights")
+    st.code(json.dumps(scoring_model, indent=2, default=str), language="json")
+
+    st.markdown("### API Payload Preview")
+    st.code(json.dumps(previews, indent=2, default=str), language="json")
 
 
 def build_score_heatmap(score_df):
@@ -1199,9 +1546,11 @@ def render_source_badges(result):
     w_cls = "warning-pill" if "fallback" in weather_source.lower() else "source-pill"
     a_cls = "warning-pill" if "fallback" in astronomy_source.lower() else "source-pill"
     st.markdown(
+        f'<div class="inline-cell">'
         f'<span class="{w_cls}">Weather: {weather_source}</span>'
         f'<span class="{a_cls}">Astronomy: {astronomy_source}</span>'
-        f'<span class="source-pill">Timezone: {timezone_value}</span>',
+        f'<span class="source-pill">Timezone: {timezone_value}</span>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -1257,6 +1606,11 @@ if run_button:
             st.stop()
 
 
+# Apply neutral background before pipeline data exists.
+if "pipeline_result" not in st.session_state:
+    apply_reactive_sky_style("neutral")
+
+
 if "pipeline_result" not in st.session_state:
     st.markdown(
         """
@@ -1264,8 +1618,40 @@ if "pipeline_result" not in st.session_state:
             <div class="hero-flex">
                 <div class="hero-left">
                     <div class="hero-icon-wrap">🚀</div>
-                    <div>
-                        <h1 class="hero-title" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:2rem; color:#e4dff0; line-height:1.15; margin:0 0 5px 0;">Stargazing Assistant</h1>
+                    <div class="hero-copy">
+                        <div class="hero-sparkles">
+                            <span class="hero-const-line l1"></span>
+                            <span class="hero-const-line l2"></span>
+                            <span class="hero-const-line l3"></span>
+                            <span class="hero-const-line l4"></span>
+                            <span class="hero-const-line l5"></span>
+                            <span class="hero-const-line l6"></span>
+                            <span class="hero-const-line l7"></span>
+                            <span class="hero-const-line l8"></span>
+                            <span class="hero-const-line l9"></span>
+                            <span class="hero-const-line l10"></span>
+                            <span class="hero-const-line l11"></span>
+                            <span class="hero-const-line l12"></span>
+                            <span class="hero-const-line l13"></span>
+                            <span class="hero-sparkle s1"></span>
+                            <span class="hero-sparkle s2"></span>
+                            <span class="hero-sparkle s3"></span>
+                            <span class="hero-sparkle s4"></span>
+                            <span class="hero-sparkle s5"></span>
+                            <span class="hero-sparkle s6"></span>
+                            <span class="hero-sparkle s7"></span>
+                            <span class="hero-sparkle s8"></span>
+                            <span class="hero-sparkle s9"></span>
+                            <span class="hero-sparkle s10"></span>
+                            <span class="hero-sparkle s11"></span>
+                            <span class="hero-sparkle s12"></span>
+                            <span class="hero-sparkle s13"></span>
+                            <span class="hero-sparkle s14"></span>
+                            <span class="hero-const-label ursa">Ursa Minor</span>
+                            <span class="hero-const-label polaris">Polaris</span>
+                            <span class="hero-const-label plough">The Plough</span>
+                        </div>
+                        <h1 class="hero-title">Stargazing Assistant</h1>
                         <p class="hero-desc">
                             A live decision-support tool for finding the best stargazing windows
                             using weather, astronomy, light pollution, scoring logic, and optional
@@ -1309,19 +1695,23 @@ weather_df    = result.get("weather_df",    pd.DataFrame())
 ip_geo_df     = result.get("ip_geo_df",     pd.DataFrame())
 event_df      = result.get("event_df",      pd.DataFrame())
 position_df   = pd.DataFrame()
+telemetry     = result.get("telemetry",     {})
 
 if top_windows is None or top_windows.empty:
     display_empty_result_debug(score_df, top_windows)
 
-
-# ============================================================
-# OPTIONAL POSITION DATA
-# ============================================================
+sky_state = infer_reactive_sky_state(score_df, top_windows)
+apply_reactive_sky_style(sky_state)
 
 if include_positions:
-    with st.spinner("Fetching Sun/Moon position data for visualization only..."):
+    with st.spinner("Fetching Sun/Moon position data for visualization..."):
         try:
-            position_df = cached_fetch_positions(lat=result["lat"], lon=result["lon"])
+            position_df = cached_fetch_positions(
+                lat=result["lat"],
+                lon=result["lon"],
+                timezone=result.get("timezone", timezone or "UTC"),
+                days=days,
+            )
         except Exception as e:
             st.warning(f"Sun/Moon position visualization unavailable: {e}")
             position_df = pd.DataFrame()
@@ -1343,8 +1733,40 @@ st.markdown(
         <div class="hero-flex">
             <div class="hero-left">
                 <div class="hero-icon-wrap">🚀</div>
-                <div>
-                    <h1 class="hero-title" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:2rem; color:#e4dff0; line-height:1.15; margin:0 0 5px 0;">Stargazing Assistant</h1>
+                <div class="hero-copy">
+                    <div class="hero-sparkles">
+                        <span class="hero-const-line l1"></span>
+                        <span class="hero-const-line l2"></span>
+                        <span class="hero-const-line l3"></span>
+                        <span class="hero-const-line l4"></span>
+                        <span class="hero-const-line l5"></span>
+                        <span class="hero-const-line l6"></span>
+                        <span class="hero-const-line l7"></span>
+                        <span class="hero-const-line l8"></span>
+                        <span class="hero-const-line l9"></span>
+                        <span class="hero-const-line l10"></span>
+                        <span class="hero-const-line l11"></span>
+                        <span class="hero-const-line l12"></span>
+                        <span class="hero-const-line l13"></span>
+                        <span class="hero-sparkle s1"></span>
+                        <span class="hero-sparkle s2"></span>
+                        <span class="hero-sparkle s3"></span>
+                        <span class="hero-sparkle s4"></span>
+                        <span class="hero-sparkle s5"></span>
+                        <span class="hero-sparkle s6"></span>
+                        <span class="hero-sparkle s7"></span>
+                        <span class="hero-sparkle s8"></span>
+                        <span class="hero-sparkle s9"></span>
+                        <span class="hero-sparkle s10"></span>
+                        <span class="hero-sparkle s11"></span>
+                        <span class="hero-sparkle s12"></span>
+                        <span class="hero-sparkle s13"></span>
+                        <span class="hero-sparkle s14"></span>
+                        <span class="hero-const-label ursa">Ursa Minor</span>
+                        <span class="hero-const-label polaris">Polaris</span>
+                        <span class="hero-const-label plough">The Plough</span>
+                    </div>
+                    <h1 class="hero-title">Stargazing Assistant</h1>
                     <p class="hero-desc">
                         A live decision-support tool for finding the best stargazing windows
                         using weather, astronomy, light pollution, scoring logic, clustering,
@@ -1362,19 +1784,29 @@ st.markdown(
 )
 
 render_source_badges(result)
+st.caption(f"Reactive sky mode: {sky_state.replace('_', ' ').title()}")
 
 st.markdown(
     """
-    <p class="info-note">
-    &#9432;&nbsp; Score is generated only from the weather/astronomy scoring pipeline.
-    Sun/Moon position data, clustering, and AI/RAG explanation do not change the score.</p>
+    <div class="inline-cell">
+        <p class="info-note">
+        &#9432;&nbsp; Score is generated only from the weather/astronomy scoring pipeline.
+        Sun/Moon position data, clustering, and AI/RAG explanation do not change the score.</p>
+    </div>
     """,
     unsafe_allow_html=True,
 )
 
-st.success(
-    f"Live data loaded for {result.get('city_name', city_name)} "
-    f"({result.get('lat', 0):.4f}, {result.get('lon', 0):.4f})"
+st.markdown(
+    f"""
+    <div class="inline-cell">
+        <p class="status-text">
+            Live data loaded for {result.get('city_name', city_name)}
+            ({result.get('lat', 0):.4f}, {result.get('lon', 0):.4f})
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 
@@ -1426,11 +1858,17 @@ st.divider()
 
 
 # ============================================================
-# PAGE ROUTER
+# DASHBOARD SECTIONS
 # ============================================================
 
-if selected_page == "Dashboard":
-    st.subheader("Dashboard")
+def _section_open(name: str) -> bool:
+    return selected_page == "All Sections" or selected_page == name
+
+
+if selected_page != "All Sections":
+    st.caption(f"Focused section: {selected_page}")
+
+with st.expander("Overview", expanded=_section_open("Overview")):
     st.markdown(
         f"""
         <div class="section-card">
@@ -1442,40 +1880,15 @@ if selected_page == "Dashboard":
             <span class="badge {badge_class(best_label)}">{best_label}</span>
             <p class="muted" style="margin-top:12px;">{explain_row(best_row)}</p>
         </div>
-        """, unsafe_allow_html=True,
+        """,
+        unsafe_allow_html=True,
     )
-    st.subheader("Top 3 Recommended Windows")
     cols = st.columns(3)
     for i, (_, row) in enumerate(top_windows.head(3).iterrows()):
         with cols[i]:
             render_window_card(i + 1, row)
 
-    st.subheader("Score Trend Preview")
-    chart_df = score_df.copy()
-    chart_df["local_dt"] = pd.to_datetime(chart_df["local_dt"], errors="coerce")
-    fig_score = px.line(
-        chart_df, x="local_dt", y="stargazing_score",
-        color="recommendation", markers=True,
-        title="Hourly Stargazing Score",
-        hover_data=[c for c in [
-            "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-            "is_dark_enough","is_moon_up","effective_darkness","atmospheric_score",
-        ] if c in chart_df.columns],
-        labels=labels_for(
-            "local_dt", "stargazing_score", "recommendation", "cloud_value",
-            "transparency_value", "seeing_value", "moon_illuminated_pct",
-            "is_dark_enough", "is_moon_up", "effective_darkness", "atmospheric_score",
-        ),
-    )
-    fig_score.update_layout(yaxis_range=[0, 100])
-    st.plotly_chart(_themed_layout(fig_score, 480), use_container_width=True)
-    dist_fig = build_recommendation_distribution(score_df)
-    if dist_fig is not None:
-        st.plotly_chart(dist_fig, use_container_width=True)
-
-
-elif selected_page == "Forecast Timeline":
-    st.subheader("Forecast Timeline")
+with st.expander("Forecast Timeline", expanded=_section_open("Forecast Timeline")):
     chart_df = score_df.copy()
     chart_df["local_dt"] = pd.to_datetime(chart_df["local_dt"], errors="coerce")
     fig_score = px.line(
@@ -1497,18 +1910,18 @@ elif selected_page == "Forecast Timeline":
         ),
     )
     fig_score.update_layout(yaxis_range=[0, 100])
-    st.plotly_chart(_themed_layout(fig_score, 560), use_container_width=True)
-    st.plotly_chart(build_score_heatmap(score_df), use_container_width=True)
+    st.plotly_chart(_themed_layout(fig_score, 560), width="stretch")
+    st.plotly_chart(build_score_heatmap(score_df), width="stretch")
 
+with st.expander("Observing Timeline", expanded=_section_open("Observing Timeline")):
+    st.caption("Node-based timeline of forecast windows. Scores above 85 are highlighted as optimal windows.")
+    render_observing_timeline(score_df)
 
-elif selected_page == "Best Windows":
-    st.subheader("Best Windows")
+with st.expander("Best Windows", expanded=_section_open("Best Windows")):
     cols = st.columns(3)
     for i, (_, row) in enumerate(top_windows.head(3).iterrows()):
         with cols[i]:
             render_window_card(i + 1, row)
-
-    st.subheader("Top Recommended Observing Windows")
     fig_top = px.bar(
         top_windows.sort_values("stargazing_score"),
         x="stargazing_score", y="time_label",
@@ -1526,13 +1939,10 @@ elif selected_page == "Best Windows":
         ),
     )
     fig_top.update_layout(xaxis_range=[0, 100])
-    st.plotly_chart(_themed_layout(fig_top, 520), use_container_width=True)
-    st.dataframe(top_windows, use_container_width=True)
+    st.plotly_chart(_themed_layout(fig_top, 520), width="stretch")
 
-
-elif selected_page == "Sky Conditions":
-    st.subheader("Sky Conditions")
-    st.plotly_chart(build_factor_chart(score_df), use_container_width=True)
+with st.expander("Sky Conditions", expanded=_section_open("Sky Conditions")):
+    st.plotly_chart(build_factor_chart(score_df), width="stretch")
     feature_options = [c for c in [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
         "visibility_penalty","transparency_norm","seeing_norm","humidity_quality",
@@ -1543,6 +1953,7 @@ elif selected_page == "Sky Conditions":
         selected_feature_label = st.selectbox(
             "Inspect one feature",
             list(feature_label_to_code.keys()),
+            key="dashboard_feature_selector",
         )
         selected_feature = feature_label_to_code[selected_feature_label]
         plot_df = score_df.copy()
@@ -1555,205 +1966,123 @@ elif selected_page == "Sky Conditions":
             title=f"{selected_feature_label} Over Time",
             labels=labels_for("local_dt", selected_feature),
         )
-        st.plotly_chart(_themed_layout(fig_feature, 480), use_container_width=True)
+        st.plotly_chart(_themed_layout(fig_feature, 480), width="stretch")
 
-    st.subheader("Scoring Feature Table")
-    diagnostic_cols = [c for c in [
-        "local_dt","stargazing_score","recommendation","cloud_value","transparency_value",
-        "seeing_value","visibility_penalty","transparency_norm","seeing_norm","humidity_quality",
-        "moon_brightness_penalty","effective_darkness","atmospheric_score",
-    ] if c in score_df.columns]
-    st.dataframe(score_df[diagnostic_cols].head(60), use_container_width=True)
-
-
-elif selected_page == "Sky Path":
-    st.subheader("Sky Path")
+with st.expander("Sky Path", expanded=_section_open("Sky Path")):
     st.caption("This visualization uses Sun/Moon position data only. It does not affect the recommendation score.")
     if not include_positions:
         st.info("Turn on 'Use Sun/Moon position data' in the sidebar, then run again.")
     elif position_df is None or position_df.empty:
-        st.warning("No Sun/Moon position data was returned.")
+        st.warning(
+            "No Sun/Moon position data was returned for this location/time window. "
+            "This can happen when the upstream astronomy provider has sparse coverage."
+        )
     else:
         required_cols = ["Azimuth (°)", "Altitude (°)", "Object"]
+        if "Data Source" in position_df.columns and (position_df["Data Source"] == "Estimated fallback").any():
+            st.info(
+                "Timeanddate position feed is unavailable for this location right now. "
+                "Showing estimated Sun/Moon path for continuity."
+            )
         if all(c in position_df.columns for c in required_cols):
             pos_plot_df = position_df.dropna(subset=["Azimuth (°)", "Altitude (°)"])
             if not pos_plot_df.empty:
                 fig_pos = px.scatter_polar(
-                    pos_plot_df, r="Altitude (°)", theta="Azimuth (°)", color="Object",
-                    hover_data=[c for c in ["Hour","Illuminated (%)","Moon Phase"] if c in pos_plot_df.columns],
+                    pos_plot_df,
+                    r="Altitude (°)",
+                    theta="Azimuth (°)",
+                    color="Object",
+                    hover_data=[c for c in ["Hour", "Illuminated (%)", "Moon Phase"] if c in pos_plot_df.columns],
                     title="Sun and Moon Position in the Sky",
                     labels=labels_for("Object", "Hour"),
                 )
-                st.plotly_chart(_themed_layout(fig_pos, 650), use_container_width=True)
+                st.plotly_chart(_themed_layout(fig_pos, 650), width="stretch")
             else:
                 st.warning("Position data exists, but altitude/azimuth values are missing.")
         else:
-            st.warning("Position data does not contain the required columns: Azimuth (°), Altitude (°), Object.")
-        with st.expander("Position Data"):
-            st.dataframe(position_df, use_container_width=True)
+            st.warning("Position data does not contain required columns: Azimuth (°), Altitude (°), Object.")
 
-
-elif selected_page == "AI Insight":
-    st.subheader("AI Insight")
+with st.expander("AI Insight", expanded=_section_open("AI Insight")):
     st.caption(
         "AI/RAG explains the fixed model output and searches the stargazing knowledge base. "
         "It does not change the score."
     )
-
-    insight_tab, search_tab = st.tabs(
-        ["Forecast AI Insight", "Semantic Knowledge Search"]
-    )
-
+    insight_tab, search_tab = st.tabs(["Forecast AI Insight", "Semantic Knowledge Search"])
     with insight_tab:
-        st.markdown(
-            """
-            <div class="section-card">
-                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">
-                    Forecast AI Insight
-                </h3>
-                <p class="muted">
-                    Generate an automatic forecast report from the deterministic scoring output,
-                    top observing windows, daily summary, clustering labels, and retrieved astronomy knowledge.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
         if not include_llm:
             st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
         else:
-            if st.button(
-                "Generate Forecast Insight",
-                use_container_width=True,
-                type="primary",
-            ):
+            if st.button("Generate Forecast Insight", width="stretch", type="primary", key="dashboard_generate_forecast_insight"):
                 with st.spinner("Generating forecast-based AI insight..."):
                     answer = cached_generate_forecast_insight(result["llm_context"])
-
                 st.markdown('<div class="rag-box">', unsafe_allow_html=True)
                 st.markdown(answer)
                 st.markdown('</div>', unsafe_allow_html=True)
-
-            if not HAS_RAG_BACKEND:
-                st.warning(
-                    "AI Insight UI is ready, but backend.py does not yet have the new AI/RAG functions."
-                )
-
     with search_tab:
-        st.markdown(
-            """
-            <div class="section-card">
-                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">
-                    Semantic Knowledge Search
-                </h3>
-                <p class="muted">
-                    Ask a question about stargazing, light pollution, moon phase, Bortle scale,
-                    seeing, transparency, or observing tips. The system searches the vector knowledge base
-                    and returns a source-grounded answer.
-                </p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
         user_question = st.text_area(
             "Ask the knowledge base",
             value="How do city lights and moon illumination affect stargazing?",
             height=110,
+            key="dashboard_knowledge_question",
         )
-
         use_forecast_context = st.checkbox(
             "Use current forecast context",
             value=True,
-            help=(
-                "If enabled, the answer will connect the retrieved knowledge "
-                "to the current forecast and top observing windows."
-            ),
+            key="dashboard_use_forecast_context",
         )
-
         if not include_llm:
             st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
         else:
-            if st.button("Search Knowledge Base", use_container_width=True):
+            if st.button("Search Knowledge Base", width="stretch", key="dashboard_search_knowledge"):
                 with st.spinner("Searching vector knowledge base..."):
                     answer = cached_answer_semantic_question(
                         user_question,
                         result["llm_context"],
                         use_forecast_context,
                     )
-
                 st.markdown('<div class="rag-box">', unsafe_allow_html=True)
                 st.markdown(answer)
                 st.markdown('</div>', unsafe_allow_html=True)
 
-            if not HAS_RAG_BACKEND:
-                st.warning(
-                    "Semantic Search UI is ready, but backend.py does not yet have "
-                    "`answer_semantic_knowledge_question()`."
-                )
+with st.expander("Glossary", expanded=_section_open("Glossary")):
+    render_glossary_panel()
 
+if selected_page == "Methodology":
+    with st.expander("Methodology", expanded=True):
+        st.markdown(
+            """
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Data Sources</h3>
+                <ul class="muted">
+                    <li>Primary weather source: Astrospheric</li>
+                    <li>Fallback weather source: Open-Meteo</li>
+                    <li>Primary astronomy source: IPGeolocation</li>
+                    <li>Optional detailed event source: Timeanddate</li>
+                </ul>
+            </div>
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Scoring Logic</h3>
+                <p class="muted">
+                    The score combines visibility constraints, atmospheric quality,
+                    and darkness quality. Cloud cover and daylight act as hard penalties,
+                    while transparency, seeing, humidity, moon illumination, moon altitude,
+                    and city lights influence the final score.
+                </p>
+            </div>
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">AI / RAG Layer</h3>
+                <p class="muted">
+                    The AI Insight page does not recalculate the score.
+                    It only explains the fixed model output.
+                    When RAG is enabled, the model retrieves local stargazing knowledge
+                    about sky darkness, moonlight, cloud cover, transparency, seeing,
+                    and data limitations before generating the explanation.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-
-elif selected_page == "Methodology":
-    st.subheader("Methodology")
-    st.markdown(
-        """
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Data Sources</h3>
-            <ul class="muted">
-                <li>Primary weather source: Astrospheric</li>
-                <li>Fallback weather source: Open-Meteo</li>
-                <li>Primary astronomy source: IPGeolocation</li>
-                <li>Optional detailed event source: Timeanddate</li>
-            </ul>
-        </div>
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Scoring Logic</h3>
-            <p class="muted">
-                The score combines visibility constraints, atmospheric quality,
-                and darkness quality. Cloud cover and daylight act as hard penalties,
-                while transparency, seeing, humidity, moon illumination, moon altitude,
-                and city lights influence the final score.
-            </p>
-        </div>
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">AI / RAG Layer</h3>
-            <p class="muted">
-                The AI Insight page does not recalculate the score.
-                It only explains the fixed model output.
-                When RAG is enabled, the model retrieves local stargazing knowledge
-                about sky darkness, moonlight, cloud cover, transparency, seeing,
-                and data limitations before generating the explanation.
-            </p>
-        </div>
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Important Design Rule</h3>
-            <p class="muted">
-                Sun/Moon position data, clustering, and AI/RAG explanations are
-                interpretation layers. They do not change the stargazing score.
-            </p>
-        </div>
-        """, unsafe_allow_html=True,
-    )
-
-
-elif selected_page == "Raw Data":
-    st.subheader("Raw Data")
-    st.caption("These tables are mainly for debugging and transparency.")
-    with st.expander("Generated Master DataFrame"):
-        st.dataframe(master_df, use_container_width=True)
-    with st.expander("Scored DataFrame"):
-        st.dataframe(score_df, use_container_width=True)
-    with st.expander("Top Windows DataFrame"):
-        st.dataframe(top_windows, use_container_width=True)
-    with st.expander("Weather Data"):
-        st.dataframe(weather_df, use_container_width=True)
-    with st.expander("IPGeolocation / Astronomy Data"):
-        st.dataframe(ip_geo_df, use_container_width=True)
-    if event_df is not None and not event_df.empty:
-        with st.expander("Timeanddate Event Data"):
-            st.dataframe(event_df, use_container_width=True)
-    if position_df is not None and not position_df.empty:
-        with st.expander("Sun/Moon Position Data"):
-            st.dataframe(position_df, use_container_width=True)
+if selected_page == "Telemetry":
+    with st.expander("Telemetry", expanded=True):
+        render_telemetry_console(telemetry)

@@ -2100,10 +2100,10 @@ if "pipeline_result" not in st.session_state:
     st.markdown(
         """
         <div class="hero-card">
-            <div class="hero-flex">
-                <div class="hero-left">
-                    <div class="hero-icon-wrap">🚀</div>
-                    <div class="hero-copy">
+            <div class="hero-flex" style="justify-content:center;">
+                <div class="hero-left" style="flex-direction:column;align-items:center;">
+                    <div class="hero-icon-wrap">🌌</div>
+                    <div class="hero-copy" style="text-align:center;">
                         <div class="hero-sparkles">
                             <span class="hero-const-line l1"></span>
                             <span class="hero-const-line l2"></span>
@@ -2231,7 +2231,7 @@ st.markdown(
     <div class="hero-card">
         <div class="hero-flex">
             <div class="hero-left">
-                <div class="hero-icon-wrap">🚀</div>
+                <div class="hero-icon-wrap">🌌</div>
                 <div class="hero-copy">
                     <div class="hero-sparkles">
                         <span class="hero-const-line l1"></span>

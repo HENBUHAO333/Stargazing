@@ -1469,12 +1469,46 @@ elif selected_page == "Methodology":
         </div>
 
         <div class="section-card">
+            <h3 class="section-heading">Sky Condition Clustering (K-Means)</h3>
+            <p style="color:#8880a0; font-family:'DM Sans',sans-serif; font-size:14px;
+                      font-weight:300; line-height:1.7;">
+                Each forecast hour is assigned to a sky condition group using
+                <b style="color:#e4dff0; font-weight:500;">K-Means clustering</b>
+                (k&thinsp;=&thinsp;5, via scipy). Clustering runs on five normalized features:
+            </p>
+            <ul style="color:#8880a0; font-family:'DM Sans',sans-serif; font-size:14px;
+                       line-height:1.9; font-weight:300;">
+                <li><b style="color:#e4dff0; font-weight:500;">Cloud cover</b> — raw percentage (0–100)</li>
+                <li><b style="color:#e4dff0; font-weight:500;">Transparency norm</b> — normalized 0–1, higher is clearer</li>
+                <li><b style="color:#e4dff0; font-weight:500;">Seeing norm</b> — normalized 0–1, higher is steadier</li>
+                <li><b style="color:#e4dff0; font-weight:500;">Effective darkness</b> — 0–1 after Bortle and moon penalty</li>
+                <li><b style="color:#e4dff0; font-weight:500;">Moon brightness penalty</b> — 0–1 combined illumination and altitude factor</li>
+            </ul>
+            <p style="color:#8880a0; font-family:'DM Sans',sans-serif; font-size:14px;
+                      font-weight:300; line-height:1.7; margin-top:10px;">
+                Each cluster centroid is inspected and labelled by its dominant limiting factor
+                in priority order:
+                <b style="color:#e4dff0; font-weight:500;">Overcast</b> →
+                <b style="color:#e4dff0; font-weight:500;">Cloudy but Dark</b> →
+                <b style="color:#e4dff0; font-weight:500;">Twilight</b> →
+                <b style="color:#e4dff0; font-weight:500;">Moonlit</b> →
+                <b style="color:#e4dff0; font-weight:500;">Hazy</b> →
+                <b style="color:#e4dff0; font-weight:500;">Turbulent</b> →
+                <b style="color:#e4dff0; font-weight:500;">Clear &amp; Dark</b>.
+                The cluster label and a one-sentence explanation appear on each
+                recommended window card.
+                Clustering is purely explanatory — it does not change the stargazing score.
+            </p>
+        </div>
+
+        <div class="section-card">
             <h3 class="section-heading">Important Design Rule</h3>
             <p style="color:#8880a0; font-family:'DM Sans',sans-serif; font-size:14px;
                       font-weight:300; line-height:1.7;">
                 Sun/Moon position data is used only for visualization.
                 AI recommendation is used only for natural-language explanation.
-                Neither feature changes the stargazing score.
+                Sky condition clustering is used only for interpretation.
+                None of these features change the stargazing score.
             </p>
         </div>
 

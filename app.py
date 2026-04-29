@@ -142,12 +142,24 @@ st.markdown(
         letter-spacing: -0.01em;
     }
 
-    p, li, span, label, td, th,
+    p, li, label, td, th,
     button, input, select, textarea,
     [data-testid="stMarkdownContainer"] p {
         font-family: 'DM Sans', system-ui, sans-serif !important;
     }
-
+    .material-icons,
+    .material-symbols-rounded,
+    .material-symbols-outlined,
+    [class^="material-symbols-"],
+    [class*=" material-symbols-"] {
+        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
+        white-space: nowrap !important;
+        direction: ltr !important;
+    }
     /* Subheader override */
     [data-testid="stHeadingWithActionElements"] h2,
     [data-testid="stHeadingWithActionElements"] h3 {
@@ -171,9 +183,7 @@ st.markdown(
         background: transparent !important;
     }
     [data-testid="stSidebar"] label,
-    [data-testid="stSidebar"] p,
-    [data-testid="stSidebar"] span,
-    [data-testid="stSidebar"] div {
+    [data-testid="stSidebar"] p {
         color: var(--text) !important;
         font-family: 'DM Sans', system-ui, sans-serif !important;
         font-size: 13px !important;
@@ -181,6 +191,20 @@ st.markdown(
     [data-testid="stSidebar"] .stMarkdown p {
         color: var(--text-muted) !important;
         font-size: 12px !important;
+    }
+    [data-testid="stSidebar"] span,
+    [data-testid="stSidebar"] div {
+        color: var(--text) !important;
+    }
+    [data-testid="stSidebarCollapseButton"] span,
+    [data-testid="collapsedControl"] span,
+    button[aria-label*="sidebar" i] span {
+        font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
+        font-style: normal !important;
+        font-weight: normal !important;
+        font-size: 20px !important;
+        letter-spacing: normal !important;
+        text-transform: none !important;
     }
 
     /* ── DIVIDER ────────────────────────────────────────────── */

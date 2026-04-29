@@ -326,9 +326,9 @@ st.markdown(
     }
     .hero-title {
         margin: 0 0 5px 0;
-        font-family: 'DM Serif Display', serif;
+        font-family: 'DM Serif Display', serif !important;
         font-size: 2rem;
-        font-weight: 400;
+        font-weight: 400 !important;
         color: var(--text);
         line-height: 1.15;
     }
@@ -432,9 +432,9 @@ st.markdown(
         display: block;
     }
     .section-heading {
-        font-family: 'DM Serif Display', serif;
+        font-family: 'DM Serif Display', serif !important;
         font-size: 20px;
-        font-weight: 400;
+        font-weight: 400 !important;
         color: var(--text);
         margin: 0 0 8px 0;
     }

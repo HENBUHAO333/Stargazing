@@ -50,6 +50,7 @@ def get_secret(name):
 TAD_ACCESS_KEY = get_secret("ASTRO_ACCESS_KEY")
 TAD_SECRET_KEY = get_secret("ASTRO_SECRET_KEY")
 IPGEOLOC_API_KEY = get_secret("IPGEOLOC_API_KEY")
+IPSTACK_API_KEY = get_secret("IPSTACK_API_KEY")
 OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
 
 
@@ -115,6 +116,42 @@ def get_city_coordinates(city_name: str) -> Tuple[float, float, str]:
     tz = result.get("timezone", "UTC")
 
     return lat, lon, tz
+
+
+def get_location_from_ip() -> Tuple[float, float, str, str]:
+    """
+    Detect the caller's location using ipstack's /check endpoint.
+
+    Returns (lat, lon, city_label, timezone).
+    Raises ValueError if IPSTACK_API_KEY is not set or the lookup fails.
+    """
+    if not IPSTACK_API_KEY:
+        raise ValueError("Missing IPSTACK_API_KEY in .env")
+
+    url = "http://api.ipstack.com/check"
+    params = {"access_key": IPSTACK_API_KEY}
+
+    resp = requests.get(url, params=params, timeout=10)
+    resp.raise_for_status()
+
+    data = resp.json()
+
+    if data.get("success") is False:
+        info = data.get("error", {})
+        raise ValueError(
+            f"ipstack error {info.get('code')}: {info.get('info', 'unknown error')}"
+        )
+
+    lat = data.get("latitude")
+    lon = data.get("longitude")
+
+    if lat is None or lon is None:
+        raise ValueError("ipstack did not return coordinates.")
+
+    city = data.get("city") or data.get("region_name") or data.get("country_name") or "Detected Location"
+    tz = (data.get("time_zone") or {}).get("id") or "UTC"
+
+    return float(lat), float(lon), city, tz
 
 
 # ============================================================

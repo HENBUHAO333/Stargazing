@@ -20,6 +20,7 @@ try:
         generate_forecast_ai_insight,
         answer_semantic_knowledge_question,
         fetch_tad_positions,
+        get_location_from_ip,
     )
     HAS_RAG_BACKEND = True
 
@@ -29,6 +30,7 @@ except ImportError:
         CITY_PRESETS,
         generate_llm_recommendation,
         fetch_tad_positions,
+        get_location_from_ip,
     )
     generate_rag_recommendation = None
     generate_forecast_ai_insight = None
@@ -1128,7 +1130,7 @@ st.sidebar.markdown(
 
 input_mode = st.sidebar.radio(
     "Location input mode",
-    ["City preset", "Custom latitude / longitude"],
+    ["City preset", "Custom latitude / longitude", "Auto-detect (IP)"],
 )
 
 city_name = "New York City"
@@ -1143,11 +1145,33 @@ if input_mode == "City preset":
         city_list,
         index=city_list.index("New York City") if "New York City" in city_list else 0,
     )
-else:
+elif input_mode == "Custom latitude / longitude":
     city_name = st.sidebar.text_input("Location name", "Custom Location")
     lat      = st.sidebar.number_input("Latitude",  value=40.7128, format="%.6f")
     lon      = st.sidebar.number_input("Longitude", value=-74.0060, format="%.6f")
     timezone = st.sidebar.text_input("Timezone", "America/New_York")
+else:
+    if st.sidebar.button("Detect my location", type="secondary"):
+        try:
+            _ip_lat, _ip_lon, _ip_city, _ip_tz = get_location_from_ip()
+            st.session_state["ip_location"] = {
+                "lat": _ip_lat,
+                "lon": _ip_lon,
+                "city": _ip_city,
+                "tz": _ip_tz,
+            }
+        except Exception as _e:
+            st.sidebar.error(f"Location detection failed: {_e}")
+
+    _ip_loc = st.session_state.get("ip_location")
+    if _ip_loc:
+        lat       = _ip_loc["lat"]
+        lon       = _ip_loc["lon"]
+        city_name = _ip_loc["city"]
+        timezone  = _ip_loc["tz"]
+        st.sidebar.success(f"Detected: {city_name} ({lat:.4f}, {lon:.4f})")
+    else:
+        st.sidebar.info("Press 'Detect my location' to look up your IP address.")
 
 days = st.sidebar.slider("Forecast range", min_value=1, max_value=4, value=4)
 

@@ -2097,50 +2097,21 @@ if "pipeline_result" not in st.session_state:
 
 
 if "pipeline_result" not in st.session_state:
+    # ── Hero ─────────────────────────────────────────────────────
     st.markdown(
         """
         <div class="hero-card">
-            <div class="hero-flex" style="justify-content:center;">
-                <div class="hero-left" style="flex-direction:column;align-items:center;">
-                    <div class="hero-icon-wrap">🌌</div>
-                    <div class="hero-copy" style="text-align:center;">
-                        <div class="hero-sparkles">
-                            <span class="hero-const-line l1"></span>
-                            <span class="hero-const-line l2"></span>
-                            <span class="hero-const-line l3"></span>
-                            <span class="hero-const-line l4"></span>
-                            <span class="hero-const-line l5"></span>
-                            <span class="hero-const-line l6"></span>
-                            <span class="hero-const-line l7"></span>
-                            <span class="hero-const-line l8"></span>
-                            <span class="hero-const-line l9"></span>
-                            <span class="hero-const-line l10"></span>
-                            <span class="hero-const-line l11"></span>
-                            <span class="hero-const-line l12"></span>
-                            <span class="hero-const-line l13"></span>
-                            <span class="hero-sparkle s1"></span>
-                            <span class="hero-sparkle s2"></span>
-                            <span class="hero-sparkle s3"></span>
-                            <span class="hero-sparkle s4"></span>
-                            <span class="hero-sparkle s5"></span>
-                            <span class="hero-sparkle s6"></span>
-                            <span class="hero-sparkle s7"></span>
-                            <span class="hero-sparkle s8"></span>
-                            <span class="hero-sparkle s9"></span>
-                            <span class="hero-sparkle s10"></span>
-                            <span class="hero-sparkle s11"></span>
-                            <span class="hero-sparkle s12"></span>
-                            <span class="hero-sparkle s13"></span>
-                            <span class="hero-sparkle s14"></span>
-                            <span class="hero-const-label ursa">Ursa Minor</span>
-                            <span class="hero-const-label polaris">Polaris</span>
-                            <span class="hero-const-label plough">The Plough</span>
-                        </div>
-                        <h1 class="hero-title">Stargazing Assistant</h1>
+            <div class="hero-flex">
+                <div class="hero-left">
+                    <div class="hero-icon-wrap">🔭</div>
+                    <div>
+                        <h1 class="hero-title" style="font-family:'DM Serif Display',Georgia,serif;
+                            font-weight:400;font-size:2rem;color:#e4dff0;line-height:1.15;margin:0 0 5px 0;">
+                            Stargazing Assistant
+                        </h1>
                         <p class="hero-desc">
-                            A live decision-support tool for finding the best stargazing windows
-                            using weather, astronomy, light pollution, scoring logic, and optional
-                            AI / RAG explanation.
+                            Find tonight's best observing window using live weather, astronomy,
+                            and light-pollution data — in one click.
                         </p>
                     </div>
                 </div>
@@ -2149,18 +2120,152 @@ if "pipeline_result" not in st.session_state:
         """,
         unsafe_allow_html=True,
     )
+
+    # ── 3-step guide ─────────────────────────────────────────────
     st.markdown(
         """
-        <div class="section-card">
-            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Ready to find your best stargazing window?</h3>
-            <p class="muted">
-                Choose a location from the sidebar, adjust the city lights index,
-                and run the live recommendation pipeline.
-            </p>
+        <style>
+        .steps-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+        .step-card {
+            flex: 1;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 14px;
+        }
+        .step-num {
+            width: 28px; height: 28px;
+            border-radius: 50%;
+            background: var(--accent-soft);
+            border: 1px solid rgba(196,120,210,0.35);
+            color: var(--accent);
+            font-size: 13px;
+            font-weight: 700;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .step-body {}
+        .step-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 3px;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .step-desc {
+            font-size: 12px;
+            color: var(--text-muted);
+            line-height: 1.55;
+            font-family: 'DM Sans', sans-serif;
+        }
+        .cta-row {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 20px;
+        }
+        .cta-hint {
+            font-size: 12px;
+            color: var(--text-dim);
+            font-family: 'DM Sans', sans-serif;
+        }
+        </style>
+        <div class="steps-row">
+            <div class="step-card">
+                <div class="step-num">1</div>
+                <div class="step-body">
+                    <div class="step-title">Pick a location</div>
+                    <div class="step-desc">Choose a city preset or enter custom coordinates in the sidebar.</div>
+                </div>
+            </div>
+            <div class="step-card">
+                <div class="step-num">2</div>
+                <div class="step-body">
+                    <div class="step-title">Configure options</div>
+                    <div class="step-desc">Set forecast range, Bortle index, and toggle optional data sources.</div>
+                </div>
+            </div>
+            <div class="step-card">
+                <div class="step-num">3</div>
+                <div class="step-body">
+                    <div class="step-title">Run the pipeline</div>
+                    <div class="step-desc">Hit the button below — results appear in seconds.</div>
+                </div>
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    # ── CTA button ───────────────────────────────────────────────
+    st.markdown(
+        """
+        <style>
+        /* Make the primary button extra prominent in empty state */
+        div[data-testid="stButton"].nd-cta > button {
+            background: var(--accent-soft) !important;
+            border: 1px solid rgba(196,120,210,0.55) !important;
+            color: var(--accent) !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+            padding: 14px 36px !important;
+            border-radius: 10px !important;
+            letter-spacing: 0.02em;
+            box-shadow: 0 0 28px rgba(196,120,210,0.12);
+            transition: background 0.15s, box-shadow 0.15s !important;
+        }
+        div[data-testid="stButton"].nd-cta > button:hover {
+            background: rgba(196,120,210,0.28) !important;
+            box-shadow: 0 0 40px rgba(196,120,210,0.22) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_btn, col_hint = st.columns([2, 5])
+    with col_btn:
+        page_run = st.button(
+            "▶  Run Pipeline",
+            type="primary",
+            use_container_width=True,
+            key="page_run_btn",
+        )
+    with col_hint:
+        st.markdown(
+            f'<p class="cta-hint" style="padding-top:10px;">'
+            f'Currently set to <strong style="color:#e4dff0;">{city_name}</strong> · '
+            f'Bortle {bortle_index} · {days}-day forecast'
+            f'</p>',
+            unsafe_allow_html=True,
+        )
+
+    if page_run:
+        with st.spinner("Fetching live weather and astronomy data..."):
+            try:
+                result = cached_run_pipeline(
+                    city_name=city_name,
+                    lat=lat, lon=lon,
+                    timezone=timezone,
+                    days=days,
+                    bortle_index=bortle_index,
+                    include_tad=include_tad,
+                )
+                st.session_state["pipeline_result"] = result
+                st.session_state["pipeline_bortle"] = bortle_index
+                st.rerun()
+            except Exception as e:
+                st.error("The pipeline failed.")
+                st.exception(e)
+    
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown(_sky_clock_card_html(city_name), unsafe_allow_html=True)
@@ -2232,40 +2337,8 @@ st.markdown(
         <div class="hero-flex">
             <div class="hero-left">
                 <div class="hero-icon-wrap">🌌</div>
-                <div class="hero-copy">
-                    <div class="hero-sparkles">
-                        <span class="hero-const-line l1"></span>
-                        <span class="hero-const-line l2"></span>
-                        <span class="hero-const-line l3"></span>
-                        <span class="hero-const-line l4"></span>
-                        <span class="hero-const-line l5"></span>
-                        <span class="hero-const-line l6"></span>
-                        <span class="hero-const-line l7"></span>
-                        <span class="hero-const-line l8"></span>
-                        <span class="hero-const-line l9"></span>
-                        <span class="hero-const-line l10"></span>
-                        <span class="hero-const-line l11"></span>
-                        <span class="hero-const-line l12"></span>
-                        <span class="hero-const-line l13"></span>
-                        <span class="hero-sparkle s1"></span>
-                        <span class="hero-sparkle s2"></span>
-                        <span class="hero-sparkle s3"></span>
-                        <span class="hero-sparkle s4"></span>
-                        <span class="hero-sparkle s5"></span>
-                        <span class="hero-sparkle s6"></span>
-                        <span class="hero-sparkle s7"></span>
-                        <span class="hero-sparkle s8"></span>
-                        <span class="hero-sparkle s9"></span>
-                        <span class="hero-sparkle s10"></span>
-                        <span class="hero-sparkle s11"></span>
-                        <span class="hero-sparkle s12"></span>
-                        <span class="hero-sparkle s13"></span>
-                        <span class="hero-sparkle s14"></span>
-                        <span class="hero-const-label ursa">Ursa Minor</span>
-                        <span class="hero-const-label polaris">Polaris</span>
-                        <span class="hero-const-label plough">The Plough</span>
-                    </div>
-                    <h1 class="hero-title">Stargazing Assistant</h1>
+                <div>
+                    <h1 class="hero-title" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:2rem; color:#e4dff0; line-height:1.15; margin:0 0 5px 0;">Stargazing Assistant</h1>
                     <p class="hero-desc">
                         A live decision-support tool for finding the best stargazing windows
                         using weather, astronomy, light pollution, scoring logic, clustering,
@@ -2283,29 +2356,19 @@ st.markdown(
 )
 
 render_source_badges(result)
-st.caption(f"Reactive sky mode: {sky_state.replace('_', ' ').title()}")
 
 st.markdown(
     """
-    <div class="inline-cell">
-        <p class="info-note">
-        &#9432;&nbsp; Score is generated only from the weather/astronomy scoring pipeline.
-        Sun/Moon position data, clustering, and AI/RAG explanation do not change the score.</p>
-    </div>
+    <p class="info-note">
+    &#9432;&nbsp; Score is generated only from the weather/astronomy scoring pipeline.
+    Sun/Moon position data, clustering, and AI/RAG explanation do not change the score.</p>
     """,
     unsafe_allow_html=True,
 )
 
-st.markdown(
-    f"""
-    <div class="inline-cell">
-        <p class="status-text">
-            Live data loaded for {result.get('city_name', city_name)}
-            ({result.get('lat', 0):.4f}, {result.get('lon', 0):.4f})
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
+st.success(
+    f"Live data loaded for {result.get('city_name', city_name)} "
+    f"({result.get('lat', 0):.4f}, {result.get('lon', 0):.4f})"
 )
 
 

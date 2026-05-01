@@ -4,7 +4,11 @@ import random
 import os
 from html import escape
 import streamlit as st
+<<<<<<< Updated upstream
 import streamlit.components.v1 as components
+=======
+import numpy as np
+>>>>>>> Stashed changes
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
@@ -1122,6 +1126,7 @@ selected_page = st.sidebar.radio(
         "Overview",
         "Best Windows",
         "Sky Conditions",
+        "Score Validation",
         "Sky Path",
         "Celestial Phenomena",
         "AI Insight",
@@ -1249,7 +1254,7 @@ if st.sidebar.button("Clear cached data", width="stretch"):
 # ============================================================
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def cached_run_pipeline(city_name, lat, lon, timezone, days, bortle_index, include_tad):
+def cached_run_pipeline(city_name, lat, lon, timezone, days, bortle_index, include_tad, include_positions):
     return run_pipeline(
         city_name=city_name,
         lat=lat, lon=lon,
@@ -1257,7 +1262,7 @@ def cached_run_pipeline(city_name, lat, lon, timezone, days, bortle_index, inclu
         days=days,
         bortle_index=bortle_index,
         include_tad=include_tad,
-        include_positions=False,
+        include_positions=include_positions,
         include_llm=False,
     )
 
@@ -1456,12 +1461,46 @@ HUMAN_LABELS = {
     "is_dark_enough": "Dark Enough",
     "is_moon_up": "Moon Above Horizon",
     "visibility_penalty": "Visibility Penalty",
+    "cloud_transmission": "Cloud Transmission",
+    "darkness_gate": "Darkness Gate",
     "transparency_norm": "Transparency Quality",
     "seeing_norm": "Seeing Quality",
     "humidity_quality": "Humidity Quality",
+    "haze_quality": "Haze Quality",
     "moon_brightness_penalty": "Moon Brightness Penalty",
     "effective_darkness": "Effective Darkness",
     "atmospheric_score": "Atmospheric Score",
+    "observability_score": "Observability Score",
+    "view_quality_score": "View Quality Score",
+    "legacy_stargazing_score": "Legacy Score",
+    "aerosol_optical_depth": "Aerosol Optical Depth",
+    "pm2_5": "PM2.5",
+    "dust": "Dust",
+    "meteoblue_cloud_value": "Meteoblue Cloud Cover",
+    "meteoblue_low_clouds": "Meteoblue Low Clouds",
+    "meteoblue_mid_clouds": "Meteoblue Mid Clouds",
+    "meteoblue_high_clouds": "Meteoblue High Clouds",
+    "meteoblue_visibility_m": "Meteoblue Visibility",
+    "meteoblue_transparency_value": "Meteoblue Transparency Proxy",
+    "meteoblue_seeing_proxy_value": "Meteoblue Seeing Proxy",
+    "meteoblue_relativehumidity": "Meteoblue Relative Humidity",
+    "meteoblue_fog_probability": "Meteoblue Fog Probability",
+    "cloud_model_delta": "Cloud Model Delta",
+    "transparency_model_delta": "Transparency Model Delta",
+    "expected_score": "Formula Recomputed Score",
+    "score_residual": "Formula Difference",
+    "expected_recommendation": "Formula Recomputed Label",
+    "score_band": "Score Band",
+    "darkness_state": "Darkness State",
+    "moon_state": "Moon State",
+    "cloud_band": "Cloud Band",
+    "bortle_index": "Bortle Index",
+    "median_score": "Median Score",
+    "mean_score": "Mean Score",
+    "peak_score": "Peak Score",
+    "excellent_good_share": "Excellent / Good Share",
+    "credibility_score": "Credibility Score",
+    "score_scope": "Score Scope",
     "time_label": "Time Window",
     "count": "Count",
     "factor": "Factor",
@@ -1476,6 +1515,25 @@ def human_label(name: str) -> str:
 
 def labels_for(*names: str) -> dict:
     return {name: human_label(name) for name in names}
+
+
+def classify_score_label(score: float) -> str:
+    score = safe_numeric(score, 0.0) or 0.0
+    if score >= 85:
+        return "Excellent"
+    if score >= 70:
+        return "Good"
+    if score >= 50:
+        return "Marginal"
+    if score >= 25:
+        return "Poor"
+    return "No-Go"
+
+
+def truthy_label(value, true_label: str, false_label: str) -> str:
+    if pd.isna(value):
+        return false_label
+    return true_label if bool(value) else false_label
 
 
 def _azimuth_to_direction(azimuth: float) -> str:
@@ -1852,6 +1910,8 @@ def build_factor_chart(score_df):
     factor_cols = [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
         "effective_darkness","atmospheric_score","visibility_penalty",
+        "cloud_transmission","haze_quality","observability_score","view_quality_score",
+        "meteoblue_cloud_value","meteoblue_transparency_value","meteoblue_seeing_proxy_value",
     ]
     existing_cols = [c for c in factor_cols if c in score_df.columns]
     plot_df = score_df.copy()
@@ -1884,8 +1944,751 @@ def build_recommendation_distribution(score_df):
     return _themed_layout(fig, 420)
 
 
+def build_score_validation_frame(score_df: pd.DataFrame) -> pd.DataFrame:
+    if score_df is None or score_df.empty:
+        return pd.DataFrame()
+
+    required = [
+        "stargazing_score",
+        "visibility_penalty",
+        "atmospheric_score",
+        "effective_darkness",
+    ]
+    if any(c not in score_df.columns for c in required):
+        return pd.DataFrame()
+
+    validation_df = score_df.copy()
+    for col in required + [
+        "cloud_value",
+        "transparency_value",
+        "seeing_value",
+        "dewPoint_value",
+        "temperature_value",
+        "moon_illuminated_pct",
+        "moon_meridian_altitude",
+        "moon_brightness_penalty",
+        "transparency_norm",
+        "seeing_norm",
+        "humidity_quality",
+        "haze_quality",
+        "cloud_transmission",
+        "darkness_gate",
+        "observability_score",
+        "view_quality_score",
+        "legacy_stargazing_score",
+        "aerosol_optical_depth",
+        "pm2_5",
+        "dust",
+        "meteoblue_cloud_value",
+        "meteoblue_low_clouds",
+        "meteoblue_mid_clouds",
+        "meteoblue_high_clouds",
+        "meteoblue_visibility_m",
+        "meteoblue_transparency_value",
+        "meteoblue_seeing_proxy_value",
+        "meteoblue_relativehumidity",
+        "meteoblue_fog_probability",
+        "cloud_model_delta",
+        "transparency_model_delta",
+    ]:
+        if col in validation_df.columns:
+            validation_df[col] = pd.to_numeric(validation_df[col], errors="coerce")
+
+    if {"observability_score", "view_quality_score"}.issubset(validation_df.columns):
+        validation_df["expected_score"] = (
+            100
+            * np.power(validation_df["observability_score"] / 100.0, 0.62)
+            * np.power(validation_df["view_quality_score"] / 100.0, 0.38)
+        ).clip(0, 100)
+    else:
+        validation_df["expected_score"] = (
+            100
+            * validation_df["visibility_penalty"]
+            * (
+                0.65 * validation_df["atmospheric_score"]
+                + 0.35 * validation_df["effective_darkness"]
+            )
+        ).clip(0, 100)
+
+    if {"atmospheric_score", "effective_darkness"}.issubset(validation_df.columns):
+        validation_df["expected_view_quality_score"] = (
+            100
+            * (
+                0.52 * validation_df["atmospheric_score"]
+                + 0.48 * validation_df["effective_darkness"]
+            )
+        ).clip(0, 100)
+
+    if {"darkness_gate", "cloud_transmission", "effective_darkness"}.issubset(validation_df.columns):
+        validation_df["expected_observability_score"] = (
+            100
+            * validation_df["darkness_gate"]
+            * validation_df["cloud_transmission"]
+            * (0.70 + 0.30 * validation_df["effective_darkness"])
+        ).clip(0, 100)
+
+    validation_df["score_residual"] = (
+        validation_df["stargazing_score"] - validation_df["expected_score"]
+    ).abs()
+    validation_df["expected_recommendation"] = validation_df["expected_score"].apply(
+        classify_score_label
+    )
+
+    validation_df["score_band"] = pd.cut(
+        validation_df["stargazing_score"],
+        bins=[-0.01, 25, 50, 70, 85, 100],
+        labels=["No-Go <25", "Poor 25-49", "Marginal 50-69", "Good 70-84", "Excellent 85+"],
+        include_lowest=True,
+    )
+    validation_df["darkness_state"] = validation_df.get(
+        "is_dark_enough",
+        pd.Series(False, index=validation_df.index),
+    ).map(lambda x: truthy_label(x, "Dark enough", "Daylight / Twilight"))
+    validation_df["moon_state"] = validation_df.get(
+        "is_moon_up",
+        pd.Series(False, index=validation_df.index),
+    ).map(lambda x: truthy_label(x, "Moon up", "Moon down"))
+
+    if "cloud_value" in validation_df.columns:
+        validation_df["cloud_band"] = pd.cut(
+            validation_df["cloud_value"],
+            bins=[-0.01, 20, 40, 60, 80, 100],
+            labels=["0-20%", "21-40%", "41-60%", "61-80%", "81-100%"],
+            include_lowest=True,
+        )
+
+    if "local_dt" in validation_df.columns:
+        validation_df["local_dt"] = pd.to_datetime(validation_df["local_dt"], errors="coerce")
+        validation_df["hour"] = validation_df["local_dt"].dt.hour
+
+    return validation_df
+
+
+def build_bortle_sensitivity_frame(validation_df: pd.DataFrame) -> pd.DataFrame:
+    if validation_df is None or validation_df.empty:
+        return pd.DataFrame()
+    required = ["atmospheric_score", "moon_brightness_penalty"]
+    if any(c not in validation_df.columns for c in required):
+        return pd.DataFrame()
+
+    rows = []
+    source = validation_df.dropna(subset=required).copy()
+    if source.empty:
+        return pd.DataFrame()
+
+    for bortle in range(1, 10):
+        light_pollution_factor = bortle / 9.0
+        base_darkness = 1.0 - (light_pollution_factor * 0.8)
+        effective_darkness = (
+            base_darkness
+            - source["moon_brightness_penalty"] * (1 - light_pollution_factor)
+        ).clip(0, 1)
+        if {"darkness_gate", "cloud_transmission"}.issubset(source.columns):
+            observability_score = (
+                100
+                * source["darkness_gate"]
+                * source["cloud_transmission"]
+                * (0.70 + 0.30 * effective_darkness)
+            ).clip(0, 100)
+            view_quality_score = (
+                100
+                * (0.52 * source["atmospheric_score"] + 0.48 * effective_darkness)
+            ).clip(0, 100)
+            simulated_score = (
+                100
+                * np.power(observability_score / 100.0, 0.62)
+                * np.power(view_quality_score / 100.0, 0.38)
+            ).clip(0, 100)
+        else:
+            simulated_score = (
+                100
+                * source["visibility_penalty"]
+                * (0.65 * source["atmospheric_score"] + 0.35 * effective_darkness)
+            ).clip(0, 100)
+        rows.append(
+            {
+                "bortle_index": bortle,
+                "mean_score": simulated_score.mean(),
+                "median_score": simulated_score.median(),
+                "peak_score": simulated_score.max(),
+                "excellent_good_share": (simulated_score >= 70).mean(),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def _quality_flag(label: str, status: str, detail: str) -> dict:
+    return {"check": label, "status": status, "detail": detail}
+
+
+def _status_badge_class(status: str) -> str:
+    status = str(status).lower()
+    if status == "good":
+        return "badge-good"
+    if status == "watch":
+        return "badge-marginal"
+    if status == "high risk":
+        return "badge-poor"
+    return "badge-nogo"
+
+
+def render_audit_cards(audit_df: pd.DataFrame):
+    if audit_df is None or audit_df.empty:
+        st.info("No audit rows were generated for this run.")
+        return
+
+    for _, row in audit_df.iterrows():
+        status = str(row.get("status", "Unknown"))
+        st.markdown(
+            f"""
+            <div class="section-card" style="margin-bottom:10px;">
+                <div class="inline-cell" style="justify-content:space-between;">
+                    <h4 style="margin:0;color:#e4dff0;font-size:15px;">{escape(str(row.get("check", "Audit check")))}</h4>
+                    <span class="badge {_status_badge_class(status)}">{escape(status)}</span>
+                </div>
+                <p class="muted" style="margin-top:8px;">{escape(str(row.get("detail", "")))}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_validation_source_cards():
+    sources = [
+        {
+            "source": "Open-Meteo Air Quality",
+            "use": "Aerosol optical depth, PM2.5, and dust validate haze/transparency.",
+            "integration": "Implemented as no-key enrichment when weather is fetched.",
+        },
+        {
+            "source": "Timeanddate Astro Position",
+            "use": "Hourly Moon altitude, azimuth, and illumination validate moonlight penalty.",
+            "integration": "Used for moonlight penalty when position data is enabled.",
+        },
+        {
+            "source": "Meteoblue Astronomy Seeing",
+            "use": "Independent seeing indices, cloud layers, and jet stream context.",
+            "integration": "Best paid/API candidate to replace fallback seeing placeholders.",
+        },
+        {
+            "source": "Skyfield or Astropy",
+            "use": "Local Sun/Moon altitude and azimuth without a remote API.",
+            "integration": "Good package fallback if Timeanddate position API is unavailable.",
+        },
+        {
+            "source": "GLOBE at Night / SQM logs",
+            "use": "Observed limiting magnitude and sky quality readings validate real outcomes.",
+            "integration": "Best calibration target for learning weights and thresholds.",
+        },
+        {
+            "source": "VIIRS / NASA Black Marble / light-pollution rasters",
+            "use": "Location-derived night-light brightness validates manual Bortle input.",
+            "integration": "Future Bortle/skyglow estimator.",
+        },
+    ]
+
+    for item in sources:
+        st.markdown(
+            f"""
+            <div class="section-card" style="margin-bottom:10px;">
+                <h4 style="margin:0;color:#e4dff0;font-size:15px;">{escape(item["source"])}</h4>
+                <p class="muted" style="margin:8px 0 4px 0;"><b>Use:</b> {escape(item["use"])}</p>
+                <p class="muted" style="margin:0;"><b>Integration:</b> {escape(item["integration"])}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def render_external_verification_recipe():
+    st.markdown("### External Verification Recipe")
+    st.markdown(
+        """
+        1. Collect observations for the app's top 1-3 windows: user rating, visible limiting magnitude, SQM reading if available, and whether the Milky Way or common constellations were visible.
+        2. Store the matching forecast row: score, observability, view quality, cloud cover, haze, Moon altitude, Moon illumination, and Bortle/sky brightness.
+        3. Compare forecast score to observed outcome using correlation, calibration curves, and confusion matrices for labels such as No-Go/Poor/Marginal/Good.
+        4. Fit weights on historical observations, then keep a blind validation set so the model is not graded on the same data used to tune it.
+        5. Display confidence separately from score: high confidence requires real seeing/transparency, hourly Moon geometry, low missingness, and observed calibration coverage near that location.
+        """
+    )
+
+
+def _score_health_status(value: float, warn_at: float, fail_at: float, higher_is_worse: bool = True) -> str:
+    if higher_is_worse:
+        if value >= fail_at:
+            return "High Risk"
+        if value >= warn_at:
+            return "Watch"
+        return "Good"
+    if value <= fail_at:
+        return "High Risk"
+    if value <= warn_at:
+        return "Watch"
+    return "Good"
+
+
+def build_score_credibility_audit(
+    validation_df: pd.DataFrame,
+    result: dict,
+    residual_max: float,
+    label_mismatches: int,
+) -> tuple:
+    if validation_df is None or validation_df.empty:
+        return pd.DataFrame(), 0, []
+
+    result = result or {}
+    weather_source = str(result.get("weather_source", "Unknown"))
+    astronomy_source = str(result.get("astronomy_source", "Unknown"))
+
+    data_cols = [
+        c for c in [
+            "cloud_value",
+            "transparency_value",
+            "seeing_value",
+            "dewPoint_value",
+            "temperature_value",
+            "moon_illuminated_pct",
+            "moon_meridian_altitude",
+        ] if c in validation_df.columns
+    ]
+    missing_share = (
+        validation_df[data_cols].isna().mean().mean()
+        if data_cols else 1.0
+    )
+
+    dark_share = (
+        validation_df.get("is_dark_enough", pd.Series(False, index=validation_df.index))
+        .fillna(False)
+        .astype(bool)
+        .mean()
+    )
+    poor_or_nogo_share = (
+        validation_df["recommendation"].isin(["Poor", "No-Go"]).mean()
+        if "recommendation" in validation_df.columns else 1.0
+    )
+    score_std = validation_df["stargazing_score"].std()
+    score_range = (
+        validation_df["stargazing_score"].max()
+        - validation_df["stargazing_score"].min()
+    )
+    seeing_std = (
+        validation_df["seeing_value"].std()
+        if "seeing_value" in validation_df.columns else 0.0
+    )
+    transparency_std = (
+        validation_df["transparency_value"].std()
+        if "transparency_value" in validation_df.columns else 0.0
+    )
+    has_meteoblue = "Meteoblue" in weather_source or (
+        "meteoblue_cloud_value" in validation_df.columns
+        and validation_df["meteoblue_cloud_value"].notna().any()
+    )
+    cloud_delta_mean = (
+        validation_df["cloud_model_delta"].mean()
+        if "cloud_model_delta" in validation_df.columns else None
+    )
+    transparency_delta_mean = (
+        validation_df["transparency_model_delta"].mean()
+        if "transparency_model_delta" in validation_df.columns else None
+    )
+
+    # This is model confidence, not proof of real-world calibration.
+    # Start below 100 until external observations are available.
+    credibility = 82.0
+    issues = []
+    issues.append(
+        "No observed SQM, limiting-magnitude, user-rating, or astrophotography outcome dataset is connected yet, so this is not externally calibrated."
+    )
+
+    if "Open-Meteo fallback" in weather_source:
+        credibility -= 25
+        issues.append(
+            "Weather source is Open-Meteo fallback, so transparency is visibility-derived and seeing is a neutral placeholder."
+        )
+    elif weather_source == "Unknown":
+        credibility -= 18
+        issues.append("Weather source is unknown.")
+
+    if has_meteoblue:
+        credibility += 6
+    else:
+        credibility -= 10
+        issues.append("Meteoblue realtime validation is not available for this run.")
+
+    if missing_share > 0.10:
+        credibility -= 20
+        issues.append(f"{missing_share:.0%} of key scoring inputs are missing before fallback/coercion.")
+    elif missing_share > 0.02:
+        credibility -= 8
+        issues.append(f"{missing_share:.0%} of key scoring inputs are missing before fallback/coercion.")
+
+    if residual_max > 0.001 or label_mismatches:
+        credibility -= 30
+        issues.append("Stored score or label does not exactly match frontend formula recomputation.")
+
+    if seeing_std < 0.01:
+        credibility -= 8
+        issues.append("Seeing has almost no variance, which means the model may not be using real seeing forecasts.")
+
+    if transparency_std < 0.01:
+        credibility -= 6
+        issues.append("Transparency has almost no variance across the forecast window.")
+
+    if dark_share < 0.25:
+        credibility -= 8
+        issues.append("Most rows are daylight/twilight, so whole-forecast distributions understate usable night quality.")
+
+    if poor_or_nogo_share > 0.90:
+        credibility -= 6
+        issues.append("The output is highly compressed into Poor/No-Go, limiting ranking usefulness.")
+
+    if score_range < 10:
+        credibility -= 6
+        issues.append("Scores have a narrow range, so small input errors can change rankings.")
+
+    credibility = int(max(0, min(100, round(credibility))))
+
+    rows = [
+        _quality_flag(
+            "Formula reproducibility",
+            "Good" if residual_max <= 0.001 and label_mismatches == 0 else "High Risk",
+            f"Max residual {residual_max:.6f}; label mismatches {int(label_mismatches)}.",
+        ),
+        _quality_flag(
+            "External calibration",
+            "Watch",
+            "No observed SQM, limiting-magnitude, user-rating, or image-quality validation set is connected yet.",
+        ),
+        _quality_flag(
+            "Weather input credibility",
+            "Watch" if "Open-Meteo fallback" in weather_source else "Good",
+            f"Weather source: {weather_source}.",
+        ),
+        _quality_flag(
+            "Meteoblue realtime validation",
+            "Good" if has_meteoblue else "Watch",
+            (
+                "Meteoblue cloud/visibility/stability fields are merged into this run. "
+                f"Mean cloud model delta: {cloud_delta_mean:.1f}; mean transparency delta: {transparency_delta_mean:.2f}."
+                if has_meteoblue and cloud_delta_mean is not None and transparency_delta_mean is not None
+                else "No Meteoblue Validation fields were available in this run."
+            ),
+        ),
+        _quality_flag(
+            "Astronomy input credibility",
+            "Good" if astronomy_source != "Unknown" else "Watch",
+            f"Astronomy source: {astronomy_source}.",
+        ),
+        _quality_flag(
+            "Missing input pressure",
+            _score_health_status(missing_share, warn_at=0.02, fail_at=0.10),
+            f"Key input missingness: {missing_share:.1%}.",
+        ),
+        _quality_flag(
+            "Night-window coverage",
+            _score_health_status(dark_share, warn_at=0.35, fail_at=0.20, higher_is_worse=False),
+            f"Dark-enough rows: {dark_share:.1%}. Whole-day charts include many intentionally suppressed daylight rows.",
+        ),
+        _quality_flag(
+            "Output spread",
+            _score_health_status(score_range, warn_at=20, fail_at=10, higher_is_worse=False),
+            f"Score range: {score_range:.1f}; standard deviation: {score_std:.1f}.",
+        ),
+        _quality_flag(
+            "Seeing signal",
+            "Watch" if seeing_std < 0.01 else "Good",
+            f"Seeing standard deviation: {seeing_std:.3f}.",
+        ),
+    ]
+
+    return pd.DataFrame(rows), credibility, issues
+
+
+def build_night_scope_frame(validation_df: pd.DataFrame) -> pd.DataFrame:
+    if validation_df is None or validation_df.empty:
+        return pd.DataFrame()
+
+    all_rows = validation_df.copy()
+    all_rows["score_scope"] = "All forecast hours"
+    if "is_dark_enough" not in validation_df.columns:
+        return all_rows
+
+    night_rows = validation_df[
+        validation_df["is_dark_enough"].fillna(False).astype(bool)
+    ].copy()
+    night_rows["score_scope"] = "Dark-enough hours only"
+    return pd.concat([all_rows, night_rows], ignore_index=True)
+
+
+def render_score_improvement_guidance(validation_df: pd.DataFrame, credibility_issues: list):
+    st.markdown("### Validity Assessment")
+    st.markdown(
+        """
+        The score is internally valid as an arithmetic product of the current inputs.
+        It is not yet externally validated against observed sky quality, human observing logs,
+        SQM readings, limiting magnitude, or astrophotography outcomes.
+        """
+    )
+
+    if credibility_issues:
+        st.markdown("### Current Weak Points")
+        for issue in credibility_issues:
+            st.markdown(f"- {issue}")
+
+    st.markdown("### Highest-Impact Improvements")
+    st.markdown(
+        """
+        - Separate forecast-hour scoring from recommendation scoring: rank only dark-enough rows by default, and show daytime rows as suppressed context.
+        - Continue replacing fallback seeing/transparency placeholders with astronomy-weather inputs where available, and display lower confidence when using Open-Meteo.
+        - Prefer hourly Moon altitude from the position feed for moonlight penalty; fall back to daily meridian altitude only when hourly positions are unavailable.
+        - Use smooth cloud transmission instead of hard cloud thresholds so 39% and 41% cloud cover behave similarly.
+        - Calibrate weights and thresholds against observed outcomes such as SQM, naked-eye limiting magnitude, user ratings, or archived clear-sky observations.
+        - Keep the score split into `observability` for whether the sky is usable and `view quality` for how good it is once usable.
+        """
+    )
+
+    st.markdown("### External APIs / Packages To Validate Against")
+    render_validation_source_cards()
+    render_external_verification_recipe()
+
+    if validation_df is not None and not validation_df.empty and "is_dark_enough" in validation_df.columns:
+        night_df = validation_df[validation_df["is_dark_enough"].fillna(False).astype(bool)]
+        if not night_df.empty:
+            st.markdown("### Night-Only Baseline")
+            cols = st.columns(4)
+            cols[0].metric("Dark rows", f"{len(night_df):,}")
+            cols[1].metric("Night median", f"{night_df['stargazing_score'].median():.1f}")
+            cols[2].metric("Night peak", f"{night_df['stargazing_score'].max():.1f}")
+            cols[3].metric("Night >= 50", f"{(night_df['stargazing_score'] >= 50).mean():.0%}")
+
+
+def render_score_validation_panel(score_df: pd.DataFrame, bortle_index: int, result: dict = None):
+    validation_df = build_score_validation_frame(score_df)
+    if validation_df.empty:
+        st.warning("Score validation needs scored rows with visibility, atmosphere, and darkness columns.")
+        return
+
+    residual_max = validation_df["score_residual"].max()
+    residual_mean = validation_df["score_residual"].mean()
+    label_mismatches = 0
+    if "recommendation" in validation_df.columns:
+        label_mismatches = (
+            validation_df["recommendation"] != validation_df["expected_recommendation"]
+        ).sum()
+
+    audit_df, credibility_score, credibility_issues = build_score_credibility_audit(
+        validation_df=validation_df,
+        result=result or {},
+        residual_max=residual_max,
+        label_mismatches=label_mismatches,
+    )
+
+    st.markdown(
+        """
+        The backend score is deterministic:
+        `100 * (observability_score / 100)^0.62 * (view_quality_score / 100)^0.38`.
+        This panel recomputes that formula in the frontend, then separates formula consistency from
+        real-world score credibility.
+        """
+    )
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Rows checked", f"{len(validation_df):,}")
+    m2.metric("Max formula difference", f"{residual_max:.6f}")
+    m3.metric("Mean formula difference", f"{residual_mean:.6f}")
+    m4.metric("Label mismatches", f"{int(label_mismatches):,}")
+    m5.metric("Credibility", f"{credibility_score}/100")
+
+    if residual_max > 0.001 or label_mismatches:
+        st.warning(
+            "Frontend recomputation differs from the stored backend score or label. "
+            "Inspect the residual table below before trusting downstream summaries."
+        )
+    else:
+        st.success("Frontend recomputation matches the backend score and recommendation labels.")
+
+    dist_tab, factor_tab, sensitivity_tab = st.tabs(
+        [
+            "Score Distributions",
+            "Factor Distributions",
+            "Bortle Sensitivity",
+        ]
+    )
+
+    with dist_tab:
+        scoped_df = build_night_scope_frame(validation_df)
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_hist = px.histogram(
+                scoped_df,
+                x="stargazing_score",
+                color="score_scope",
+                nbins=20,
+                barmode="overlay",
+                opacity=0.75,
+                title="Score Distribution: All Hours vs Dark-Enough Hours",
+                labels=labels_for("stargazing_score", "score_scope", "count"),
+            )
+            fig_hist.update_layout(xaxis_range=[0, 100], bargap=0.04)
+            st.plotly_chart(_themed_layout(fig_hist, 430), width="stretch")
+        with c2:
+            rec_fig = build_recommendation_distribution(validation_df)
+            if rec_fig is not None:
+                st.plotly_chart(rec_fig, width="stretch")
+
+        c3, c4 = st.columns(2)
+        with c3:
+            fig_dark = px.box(
+                validation_df,
+                x="darkness_state",
+                y="stargazing_score",
+                color="darkness_state",
+                points="all",
+                title="Score Spread by Darkness State",
+                labels=labels_for("darkness_state", "stargazing_score"),
+            )
+            fig_dark.update_layout(showlegend=False, yaxis_range=[0, 100])
+            st.plotly_chart(_themed_layout(fig_dark, 430), width="stretch")
+        with c4:
+            fig_moon = px.box(
+                validation_df,
+                x="moon_state",
+                y="stargazing_score",
+                color="moon_state",
+                points="all",
+                title="Score Spread by Moon State",
+                labels=labels_for("moon_state", "stargazing_score"),
+            )
+            fig_moon.update_layout(showlegend=False, yaxis_range=[0, 100])
+            st.plotly_chart(_themed_layout(fig_moon, 430), width="stretch")
+
+        if "hour" in validation_df.columns:
+            hourly = (
+                validation_df.dropna(subset=["hour"])
+                .groupby("hour", as_index=False)
+                .agg(
+                    mean_score=("stargazing_score", "mean"),
+                    median_score=("stargazing_score", "median"),
+                    peak_score=("stargazing_score", "max"),
+                )
+            )
+            fig_hour = px.line(
+                hourly,
+                x="hour",
+                y=["mean_score", "median_score", "peak_score"],
+                markers=True,
+                title="Hourly Score Distribution Summary",
+                labels=labels_for("hour", "value", "factor"),
+            )
+            fig_hour.update_layout(xaxis=dict(dtick=1), yaxis_range=[0, 100])
+            st.plotly_chart(_themed_layout(fig_hour, 450), width="stretch")
+
+    with factor_tab:
+        component_cols = [
+            c for c in [
+                "visibility_penalty",
+                "cloud_transmission",
+                "darkness_gate",
+                "atmospheric_score",
+                "effective_darkness",
+                "observability_score",
+                "view_quality_score",
+                "transparency_norm",
+                "seeing_norm",
+                "humidity_quality",
+                "haze_quality",
+                "moon_brightness_penalty",
+            ] if c in validation_df.columns
+        ]
+        component_long = validation_df.melt(
+            value_vars=component_cols,
+            var_name="factor",
+            value_name="value",
+        ).dropna()
+        component_long["factor"] = component_long["factor"].map(human_label)
+        fig_components = px.box(
+            component_long,
+            x="factor",
+            y="value",
+            color="factor",
+            points="all",
+            title="Normalized Component Distributions",
+            labels=labels_for("factor", "value"),
+        )
+        fig_components.update_layout(showlegend=False)
+        st.plotly_chart(_themed_layout(fig_components, 520), width="stretch")
+
+        if "cloud_band" in validation_df.columns:
+            cloud_summary = (
+                validation_df.groupby("cloud_band", observed=True)
+                .agg(
+                    count=("stargazing_score", "size"),
+                    mean_score=("stargazing_score", "mean"),
+                    peak_score=("stargazing_score", "max"),
+                )
+                .reset_index()
+            )
+            fig_cloud = px.bar(
+                cloud_summary,
+                x="cloud_band",
+                y="mean_score",
+                color="count",
+                hover_data=["count", "peak_score"],
+                title="Mean Score by Cloud Cover Band",
+                labels=labels_for("cloud_band", "mean_score", "count", "peak_score"),
+            )
+            fig_cloud.update_layout(yaxis_range=[0, 100])
+            st.plotly_chart(_themed_layout(fig_cloud, 450), width="stretch")
+
+    with sensitivity_tab:
+        sensitivity_df = build_bortle_sensitivity_frame(validation_df)
+        if sensitivity_df.empty:
+            st.info("Bortle sensitivity needs moon brightness, visibility, and atmosphere columns.")
+        else:
+            fig_sensitivity = px.line(
+                sensitivity_df,
+                x="bortle_index",
+                y=["mean_score", "median_score", "peak_score"],
+                markers=True,
+                title=f"Score Sensitivity to City Lights, Holding This Forecast Fixed (current Bortle {bortle_index})",
+                labels=labels_for("bortle_index", "value", "factor"),
+            )
+            fig_sensitivity.update_layout(xaxis=dict(dtick=1), yaxis_range=[0, 100])
+            st.plotly_chart(_themed_layout(fig_sensitivity, 470), width="stretch")
+
+            share_fig = px.bar(
+                sensitivity_df,
+                x="bortle_index",
+                y="excellent_good_share",
+                title="Share of Forecast Hours Scoring Good or Excellent by Bortle Index",
+                labels=labels_for("bortle_index", "excellent_good_share"),
+            )
+            share_fig.update_layout(
+                xaxis=dict(dtick=1),
+                yaxis=dict(tickformat=".0%", range=[0, 1]),
+            )
+            st.plotly_chart(_themed_layout(share_fig, 390), width="stretch")
+
+            st.dataframe(
+                sensitivity_df.style.format(
+                    {
+                        "mean_score": "{:.1f}",
+                        "median_score": "{:.1f}",
+                        "peak_score": "{:.1f}",
+                        "excellent_good_share": "{:.0%}",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+            )
+
+
 def render_source_badges(result):
-    weather_source  = result.get("weather_source", "Unknown")
+    weather_source  = str(result.get("weather_source", "Unknown")).replace(
+        "Meteoblue validation",
+        "Meteoblue Validation",
+    )
     astronomy_source = result.get("astronomy_source", "Unknown")
     timezone_value  = result.get("timezone", "Unknown")
     w_cls = "warning-pill" if "fallback" in weather_source.lower() else "source-pill"
@@ -2388,6 +3191,7 @@ if run_button:
                 days=days,
                 bortle_index=bortle_index,
                 include_tad=include_tad,
+                include_positions=include_positions,
             )
             st.session_state["pipeline_result"] = result
             st.session_state["pipeline_bortle"] = bortle_index
@@ -2564,6 +3368,7 @@ if "pipeline_result" not in st.session_state:
                     days=days,
                     bortle_index=bortle_index,
                     include_tad=include_tad,
+                    include_positions=include_positions,
                 )
                 st.session_state["pipeline_result"] = result
                 st.session_state["pipeline_bortle"] = bortle_index
@@ -2595,7 +3400,7 @@ master_df     = result.get("master_df",     pd.DataFrame())
 weather_df    = result.get("weather_df",    pd.DataFrame())
 ip_geo_df     = result.get("ip_geo_df",     pd.DataFrame())
 event_df      = result.get("event_df",      pd.DataFrame())
-position_df   = pd.DataFrame()
+position_df   = result.get("position_df",   pd.DataFrame())
 telemetry     = result.get("telemetry",     {})
 
 if top_windows is None or top_windows.empty:
@@ -2604,7 +3409,7 @@ if top_windows is None or top_windows.empty:
 sky_state = infer_reactive_sky_state(score_df, top_windows)
 apply_reactive_sky_style(sky_state)
 
-if include_positions:
+if include_positions and (position_df is None or position_df.empty):
     with st.spinner("Fetching Sun/Moon position data for visualization..."):
         try:
             position_df = cached_fetch_positions(
@@ -2782,14 +3587,17 @@ with st.expander("Best Windows", expanded=_section_open("Best Windows")):
         orientation="h", color="recommendation",
         hover_data=[c for c in [
             "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-            "is_dark_enough","is_moon_up","visibility_penalty","effective_darkness","atmospheric_score",
+            "is_dark_enough","is_moon_up","visibility_penalty","cloud_transmission",
+            "effective_darkness","atmospheric_score","haze_quality",
+            "observability_score","view_quality_score",
         ] if c in top_windows.columns],
         title="Top 10 Stargazing Windows",
         labels=labels_for(
             "stargazing_score", "time_label", "recommendation", "cloud_value",
             "transparency_value", "seeing_value", "moon_illuminated_pct",
             "is_dark_enough", "is_moon_up", "visibility_penalty",
-            "effective_darkness", "atmospheric_score",
+            "cloud_transmission", "effective_darkness", "atmospheric_score",
+            "haze_quality", "observability_score", "view_quality_score",
         ),
     )
     fig_top.update_layout(xaxis_range=[0, 100])
@@ -2799,8 +3607,15 @@ with st.expander("Sky Conditions", expanded=_section_open("Sky Conditions")):
     st.plotly_chart(build_factor_chart(score_df), width="stretch")
     feature_options = [c for c in [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-        "visibility_penalty","transparency_norm","seeing_norm","humidity_quality",
-        "moon_brightness_penalty","effective_darkness","atmospheric_score","stargazing_score",
+        "visibility_penalty","cloud_transmission","darkness_gate",
+        "transparency_norm","seeing_norm","humidity_quality","haze_quality",
+        "moon_brightness_penalty","effective_darkness","atmospheric_score",
+        "observability_score","view_quality_score","legacy_stargazing_score","stargazing_score",
+        "aerosol_optical_depth","pm2_5","dust",
+        "meteoblue_cloud_value","meteoblue_low_clouds","meteoblue_mid_clouds",
+        "meteoblue_high_clouds","meteoblue_transparency_value",
+        "meteoblue_seeing_proxy_value","meteoblue_relativehumidity",
+        "meteoblue_fog_probability","cloud_model_delta","transparency_model_delta",
     ] if c in score_df.columns]
     if feature_options:
         feature_label_to_code = {human_label(c): c for c in feature_options}
@@ -2821,6 +3636,9 @@ with st.expander("Sky Conditions", expanded=_section_open("Sky Conditions")):
             labels=labels_for("local_dt", selected_feature),
         )
         st.plotly_chart(_themed_layout(fig_feature, 480), width="stretch")
+
+with st.expander("Score Validation", expanded=_section_open("Score Validation")):
+    render_score_validation_panel(score_df, bortle_index, result)
 
 with st.expander("Sky Path", expanded=_section_open("Sky Path")):
     st.caption("This visualization uses Sun/Moon position data only. It does not affect the recommendation score.")
@@ -3024,19 +3842,48 @@ if selected_page == "Methodology":
             <div class="section-card">
                 <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Data Sources</h3>
                 <ul class="muted">
-                    <li>Primary weather source: Astrospheric</li>
-                    <li>Fallback weather source: Open-Meteo</li>
-                    <li>Primary astronomy source: IPGeolocation</li>
-                    <li>Optional detailed event source: Timeanddate</li>
+                    <li>Primary astronomy-weather source: Astrospheric.</li>
+                    <li>Meteoblue Validation: realtime cloud, visibility, humidity, wind, and stability context. If Astrospheric is unavailable, Meteoblue can become the primary weather feed.</li>
+                    <li>Open-Meteo Air Quality: aerosol optical depth, PM2.5, and dust for haze validation.</li>
+                    <li>Open-Meteo weather fallback: cloud cover, visibility, temperature, dew point, and wind when higher-quality feeds are unavailable.</li>
+                    <li>Primary astronomy source: IPGeolocation for twilight, Moon phase, moonrise, and moonset.</li>
+                    <li>Optional Timeanddate data: detailed Sun/Moon events and hourly Moon position. When enabled, hourly Moon altitude/illumination are used for moonlight scoring.</li>
                 </ul>
             </div>
             <div class="section-card">
                 <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Scoring Logic</h3>
                 <p class="muted">
-                    The score combines visibility constraints, atmospheric quality,
-                    and darkness quality. Cloud cover and daylight act as hard penalties,
-                    while transparency, seeing, humidity, moon illumination, moon altitude,
-                    and city lights influence the final score.
+                    The final score is a 0-100 deterministic synthesis of two sub-scores:
+                    <b>observability_score</b>, which estimates whether the sky is practically usable,
+                    and <b>view_quality_score</b>, which estimates how good the view should be once
+                    the sky is usable.
+                </p>
+                <p class="muted">
+                    <b>Observability</b> starts with astronomical darkness and cloud cover.
+                    Daylight/twilight rows are strongly suppressed by a darkness gate. Cloud cover
+                    is converted through a smooth transmission curve instead of hard 40/60/80%
+                    cutoffs, so adjacent cloud percentages behave consistently. Observability also
+                    includes effective darkness, so dark-sky locations and low Moon interference
+                    improve the usable-window score.
+                </p>
+                <p class="muted">
+                    <b>View quality</b> blends atmospheric and contrast conditions. Atmospheric score
+                    is 40% transparency, 30% seeing or seeing proxy, 15% humidity/dew spread, and
+                    15% haze from aerosol/PM data when available. Effective darkness is reduced by
+                    Bortle light pollution and by Moon brightness when the Moon is above the horizon.
+                    If hourly Moon position data is enabled, the Moon penalty uses hourly Moon altitude;
+                    otherwise it falls back to Moon meridian altitude.
+                </p>
+                <p class="muted">
+                    <b>Final formula:</b> stargazing_score = 100 ×
+                    (observability_score / 100)<sup>0.62</sup> ×
+                    (view_quality_score / 100)<sup>0.38</sup>.
+                    This geometric blend keeps bad observability or poor view quality from being hidden
+                    by the other component, while preserving ranking spread among viable nighttime hours.
+                </p>
+                <p class="muted">
+                    Recommendation labels are assigned after scoring:
+                    Excellent ≥ 85, Good ≥ 70, Marginal ≥ 50, Poor ≥ 25, and No-Go &lt; 25.
                 </p>
             </div>
             <div class="section-card">

@@ -1,1 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #090614;
+      --border: rgba(196, 120, 210, 0.28);
+      --accent: #c478d2;
+      --accent-soft: rgba(196, 120, 210, 0.15);
+      --text: #e4dff0;
+      --muted: #8880a0;
+      --error: #f87171;
+      --success: #4ade80;
+    }
 
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      color: var(--text);
+      font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+    }
+
+    button {
+      width: 100%;
+      min-height: 38px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--muted);
+      font: inherit;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+
+    button:hover,
+    button:focus-visible {
+      border-color: var(--accent);
+      color: var(--text);
+      outline: none;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+
+    .status {
+      margin-top: 8px;
+      line-height: 1.45;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    .status.success {
+      color: var(--success);
+    }
+
+    .status.error {
+      color: var(--error);
+    }
+  </style>
+</head>
+<body>
+  <button id="detect" type="button">Detect my location</button>
+  <div id="status" class="status">Uses your browser/device location.</div>
+
+  <script>
+    const STREAMLIT_READY = "streamlit:componentReady";
+    const STREAMLIT_VALUE = "streamlit:setComponentValue";
+    const STREAMLIT_HEIGHT = "streamlit:setFrameHeight";
+
+    const button = document.getElementById("detect");
+    const statusEl = document.getElementById("status");
+
+    function post(type, data) {
+      window.parent.postMessage(
+        Object.assign({ isStreamlitMessage: true, type }, data),
+        "*"
+      );
+    }
+
+    function setHeight() {
+      post(STREAMLIT_HEIGHT, { height: document.body.scrollHeight });
+    }
+
+    function setStatus(message, kind) {
+      statusEl.textContent = message;
+      statusEl.className = kind ? `status ${kind}` : "status";
+      setHeight();
+    }
+
+    function sendValue(value) {
+      post(STREAMLIT_VALUE, { value, dataType: "json" });
+    }
+
+    function timezoneName() {
+      try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+      } catch (error) {
+        return "UTC";
+      }
+    }
+
+    function detectLocation() {
+      if (!navigator.geolocation) {
+        const message = "Browser geolocation is not available.";
+        setStatus(message, "error");
+        sendValue({ ok: false, error: message });
+        return;
+      }
+
+      button.disabled = true;
+      setStatus("Waiting for browser permission...", null);
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords = position.coords;
+          const value = {
+            ok: true,
+            lat: coords.latitude,
+            lon: coords.longitude,
+            accuracy: coords.accuracy,
+            altitude: coords.altitude,
+            heading: coords.heading,
+            speed: coords.speed,
+            timestamp: position.timestamp,
+            timezone: timezoneName(),
+          };
+
+          const accuracy = Number.isFinite(coords.accuracy)
+            ? ` Accuracy about ${Math.round(coords.accuracy)} m.`
+            : "";
+          setStatus(`Location found.${accuracy}`, "success");
+          sendValue(value);
+          button.disabled = false;
+        },
+        (error) => {
+          let message = error.message || "Location permission was denied or unavailable.";
+
+          if (error.code === error.PERMISSION_DENIED) {
+            message = "Location access is blocked for this site. Allow location permission in your browser, then try again.";
+          } else if (error.code === error.POSITION_UNAVAILABLE) {
+            message = "Your device could not provide a location right now. Try again or enter coordinates manually.";
+          } else if (error.code === error.TIMEOUT) {
+            message = "Location detection timed out. Try again or enter coordinates manually.";
+          }
+
+          setStatus(message, "error");
+          sendValue({ ok: false, error: message, code: error.code });
+          button.disabled = false;
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 60000,
+        }
+      );
+    }
+
+    let readyAttempts = 0;
+    const readyTimer = window.setInterval(() => {
+      post(STREAMLIT_READY, { apiVersion: 1 });
+      setHeight();
+      readyAttempts += 1;
+
+      if (readyAttempts >= 20) {
+        window.clearInterval(readyTimer);
+      }
+    }, 250);
+
+    window.addEventListener("message", (event) => {
+      if (event.data && event.data.type === "streamlit:render") {
+        window.clearInterval(readyTimer);
+        setHeight();
+      }
+    });
+
+    button.addEventListener("click", detectLocation);
+    window.addEventListener("load", setHeight);
+
+    post(STREAMLIT_READY, { apiVersion: 1 });
+    setHeight();
+  </script>
+</body>
+</html>

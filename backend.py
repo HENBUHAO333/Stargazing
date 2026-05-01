@@ -3006,6 +3006,9 @@ def run_pipeline(
         "lat": lat,
         "lon": lon,
         "timezone": timezone,
+        "days": int(days),
+        "bortle_index": float(bortle_index),
+        "include_tad": bool(include_tad),
         "weather_source": weather_source,
         "astronomy_source": astronomy_source,
         "weather_df": weather_df,
@@ -3020,6 +3023,78 @@ def run_pipeline(
         "llm_text": llm_text,
         "telemetry": telemetry,
     }
+
+
+def rescore_pipeline_result_for_bortle(result: Dict, bortle_index: float) -> Dict:
+    """
+    Reuse already-fetched weather/astronomy data and only recompute the score.
+
+    City lights / Bortle affects scoring, not the weather provider. This helper
+    prevents the UI from refetching Astrospheric just because the user changed
+    the city lights slider.
+    """
+
+    if not isinstance(result, dict):
+        raise ValueError("Existing pipeline result is required for rescore.")
+
+    master_df = result.get("master_df")
+    if master_df is None or master_df.empty:
+        raise ValueError("Existing pipeline result has no master dataframe to rescore.")
+
+    score_df = score_stargazing_windows(
+        master_df=master_df,
+        bortle_index=bortle_index,
+    )
+    score_df = cluster_windows(score_df)
+    top_windows = get_top_windows(score_df, n=10)
+    daily_summary = build_daily_summary(score_df)
+
+    updated = result.copy()
+    updated["bortle_index"] = float(bortle_index)
+    updated["score_df"] = score_df
+    updated["daily_summary"] = daily_summary
+    updated["top_windows"] = top_windows
+
+    updated["llm_context"] = build_llm_context(
+        city_name=updated.get("city_name", "Custom Location"),
+        lat=updated.get("lat"),
+        lon=updated.get("lon"),
+        score_df=score_df,
+        daily_summary=daily_summary,
+        top_windows=top_windows,
+        weather_source=updated.get("weather_source", "Unknown"),
+        astronomy_source=updated.get("astronomy_source", "Unknown"),
+    )
+
+    telemetry = updated.get("telemetry", {})
+    if isinstance(telemetry, dict):
+        telemetry = telemetry.copy()
+        logs = list(telemetry.get("logs", []))
+        _telemetry_log(
+            logs,
+            f"Recomputed score from cached weather/astronomy data for Bortle={float(bortle_index):.1f}.",
+        )
+        telemetry["logs"] = logs
+        pipeline = dict(telemetry.get("pipeline", {}))
+        pipeline["bortle_index"] = float(bortle_index)
+        pipeline["recommendation_counts"] = (
+            score_df["recommendation"].value_counts().to_dict()
+            if "recommendation" in score_df.columns
+            else {}
+        )
+        pipeline["cluster_counts"] = (
+            score_df["cluster_label"].value_counts().to_dict()
+            if "cluster_label" in score_df.columns
+            else {}
+        )
+        rows = dict(pipeline.get("rows", {}))
+        rows["score_df"] = int(len(score_df))
+        rows["top_windows"] = int(len(top_windows))
+        pipeline["rows"] = rows
+        telemetry["pipeline"] = pipeline
+        updated["telemetry"] = telemetry
+
+    return updated
 
 
 # ============================================================

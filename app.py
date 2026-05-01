@@ -19,35 +19,28 @@ except Exception:
 # ============================================================
 
 try:
-    from backend import (
-        run_pipeline,
-        CITY_PRESETS,
-        generate_llm_recommendation,
-        generate_rag_recommendation,
-        generate_forecast_ai_insight,
-        answer_semantic_knowledge_question,
-        generate_travel_plan_for_current_forecast,
-        TRAVEL_PLAN_SCORE_THRESHOLD,
-        fetch_tad_positions,
+    import backend as backend_module
+
+    run_pipeline = backend_module.run_pipeline
+    CITY_PRESETS = backend_module.CITY_PRESETS
+    generate_llm_recommendation = backend_module.generate_llm_recommendation
+    fetch_tad_positions = backend_module.fetch_tad_positions
+
+    generate_rag_recommendation = getattr(backend_module, "generate_rag_recommendation", None)
+    generate_forecast_ai_insight = getattr(backend_module, "generate_forecast_ai_insight", None)
+    answer_semantic_knowledge_question = getattr(backend_module, "answer_semantic_knowledge_question", None)
+    generate_travel_plan_for_current_forecast = getattr(
+        backend_module,
+        "generate_travel_plan_for_current_forecast",
+        None,
     )
-    HAS_RAG_BACKEND = True
+    TRAVEL_PLAN_SCORE_THRESHOLD = getattr(backend_module, "TRAVEL_PLAN_SCORE_THRESHOLD", 70.0)
+
+    BACKEND_IMPORT_ERROR = None
+    HAS_RAG_BACKEND = generate_rag_recommendation is not None
 
 except ImportError as backend_import_error:
-    from backend import (
-        run_pipeline,
-        CITY_PRESETS,
-        generate_llm_recommendation,
-        fetch_tad_positions,
-    )
-    generate_rag_recommendation = None
-    generate_forecast_ai_insight = None
-    answer_semantic_knowledge_question = None
-    generate_travel_plan_for_current_forecast = None
-    TRAVEL_PLAN_SCORE_THRESHOLD = 70.0
-    BACKEND_IMPORT_ERROR = str(backend_import_error)
-    HAS_RAG_BACKEND = False
-else:
-    BACKEND_IMPORT_ERROR = None
+    raise RuntimeError(f"Could not import backend.py: {backend_import_error}") from backend_import_error
 
 
 # ============================================================
@@ -3063,3 +3056,4 @@ if selected_page == "Methodology":
 if selected_page == "Telemetry":
     with st.expander("Telemetry", expanded=True):
         render_telemetry_console(telemetry)
+

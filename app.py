@@ -1,11 +1,18 @@
 import json
 import math
 import random
+import os
 from html import escape
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+
+try:
+    import pydeck as pdk
+except Exception:
+    pdk = None
 
 # ============================================================
 # BACKEND IMPORTS
@@ -19,8 +26,9 @@ try:
         generate_rag_recommendation,
         generate_forecast_ai_insight,
         answer_semantic_knowledge_question,
+        generate_travel_plan_for_current_forecast,
+        TRAVEL_PLAN_SCORE_THRESHOLD,
         fetch_tad_positions,
-        get_location_from_ip,
     )
     HAS_RAG_BACKEND = True
 
@@ -30,11 +38,12 @@ except ImportError:
         CITY_PRESETS,
         generate_llm_recommendation,
         fetch_tad_positions,
-        get_location_from_ip,
     )
     generate_rag_recommendation = None
     generate_forecast_ai_insight = None
     answer_semantic_knowledge_question = None
+    generate_travel_plan_for_current_forecast = None
+    TRAVEL_PLAN_SCORE_THRESHOLD = 70.0
     HAS_RAG_BACKEND = False
 
 
@@ -47,6 +56,16 @@ st.set_page_config(
     page_icon="🌌",
     layout="wide",
 )
+
+
+BROWSER_GEOLOCATION = components.declare_component(
+    "browser_geolocation",
+    path=os.path.join(os.path.dirname(__file__), "components", "browser_geolocation"),
+)
+
+
+def browser_geolocation(key: str = "browser_geolocation"):
+    return BROWSER_GEOLOCATION(key=key, default=None, height=72)
 
 
 # ============================================================
@@ -1130,7 +1149,7 @@ st.sidebar.markdown(
 
 input_mode = st.sidebar.radio(
     "Location input mode",
-    ["City preset", "Custom latitude / longitude", "Auto-detect (IP)"],
+    ["City preset", "Custom latitude / longitude", "Use my current location"],
 )
 
 city_name = "New York City"
@@ -1151,27 +1170,45 @@ elif input_mode == "Custom latitude / longitude":
     lon      = st.sidebar.number_input("Longitude", value=-74.0060, format="%.6f")
     timezone = st.sidebar.text_input("Timezone", "America/New_York")
 else:
-    if st.sidebar.button("Detect my location", type="secondary"):
-        try:
-            _ip_lat, _ip_lon, _ip_city, _ip_tz = get_location_from_ip()
-            st.session_state["ip_location"] = {
-                "lat": _ip_lat,
-                "lon": _ip_lon,
-                "city": _ip_city,
-                "tz": _ip_tz,
-            }
-        except Exception as _e:
-            st.sidebar.error(f"Location detection failed: {_e}")
+    with st.sidebar:
+        geo_result = browser_geolocation()
 
-    _ip_loc = st.session_state.get("ip_location")
-    if _ip_loc:
-        lat       = _ip_loc["lat"]
-        lon       = _ip_loc["lon"]
-        city_name = _ip_loc["city"]
-        timezone  = _ip_loc["tz"]
-        st.sidebar.success(f"Detected: {city_name} ({lat:.4f}, {lon:.4f})")
+    if geo_result:
+        if geo_result.get("ok"):
+            st.session_state["browser_location"] = {
+                "lat": float(geo_result["lat"]),
+                "lon": float(geo_result["lon"]),
+                "city": "Current Location",
+                "tz": geo_result.get("timezone") or "UTC",
+                "accuracy": geo_result.get("accuracy"),
+            }
+        else:
+            error_code = geo_result.get("code")
+            error_message = geo_result.get("error", "Unknown error")
+            if error_code == 1:
+                st.sidebar.warning(
+                    "Location permission is blocked for this browser/site. "
+                    "Allow location for localhost in the browser permission prompt or settings, "
+                    "then press Detect my location again. You can also use Custom latitude / longitude."
+                )
+            else:
+                st.sidebar.error(f"Location detection failed: {error_message}")
+
+    browser_loc = st.session_state.get("browser_location")
+    if browser_loc:
+        lat       = browser_loc["lat"]
+        lon       = browser_loc["lon"]
+        city_name = browser_loc["city"]
+        timezone  = browser_loc["tz"]
+        accuracy = browser_loc.get("accuracy")
+        accuracy_text = (
+            f" · accuracy about {accuracy:.0f} m"
+            if isinstance(accuracy, (int, float))
+            else ""
+        )
+        st.sidebar.success(f"Detected: {city_name} ({lat:.4f}, {lon:.4f}){accuracy_text}")
     else:
-        st.sidebar.info("Press 'Detect my location' to look up your IP address.")
+        st.sidebar.info("Allow browser location access to use precise coordinates.")
 
 days = st.sidebar.slider("Forecast range", min_value=1, max_value=4, value=4)
 
@@ -1205,6 +1242,9 @@ if st.sidebar.button("Clear cached data", width="stretch"):
     st.cache_data.clear()
     st.session_state.pop("pipeline_result", None)
     st.session_state.pop("pipeline_bortle", None)
+    st.session_state.pop("browser_location", None)
+    st.session_state.pop("browser_geolocation", None)
+    st.session_state.pop("travel_result", None)
     st.sidebar.success("Cache cleared. Run the pipeline again.")
 
 
@@ -1257,6 +1297,41 @@ def cached_generate_forecast_insight(context):
             "`generate_forecast_ai_insight()` to backend.py first."
         )
     return generate_forecast_ai_insight(context)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_generate_travel_plan(
+    context,
+    bortle_index,
+    days,
+    radius_km,
+    max_candidates,
+    score_threshold,
+    use_ai_text,
+):
+    if generate_travel_plan_for_current_forecast is None:
+        return {
+            "search": {
+                "status": "unavailable",
+                "reason": (
+                    "Travel-planning backend function not found. Please add "
+                    "`generate_travel_plan_for_current_forecast()` to backend.py first."
+                ),
+                "candidates": [],
+                "best_candidate": None,
+            },
+            "travel_plan": None,
+        }
+
+    return generate_travel_plan_for_current_forecast(
+        context=context,
+        bortle_index=bortle_index,
+        days=days,
+        radius_km=radius_km,
+        max_candidates=max_candidates,
+        score_threshold=score_threshold,
+        use_ai_text=use_ai_text,
+    )
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -1848,6 +1923,214 @@ def render_window_card(rank, row):
             <span class="badge {badge_class(label)}">{label}</span>
             <p class="muted" style="margin-top:12px;">{explanation}</p>
             {cluster_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _score_color(score: float):
+    score = safe_numeric(score, 0) or 0
+    if score >= 85:
+        return [74, 222, 128, 190]
+    if score >= 70:
+        return [94, 234, 212, 185]
+    if score >= 50:
+        return [251, 191, 36, 180]
+    if score >= 25:
+        return [251, 146, 60, 175]
+    return [248, 113, 113, 170]
+
+
+def _circle_polygon(lat: float, lon: float, radius_km: float, steps: int = 96):
+    coords = []
+    earth_radius_km = 6371.0
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    angular_distance = radius_km / earth_radius_km
+
+    for i in range(steps):
+        bearing = math.radians((360 / steps) * i)
+        lat2 = math.asin(
+            math.sin(lat1) * math.cos(angular_distance)
+            + math.cos(lat1) * math.sin(angular_distance) * math.cos(bearing)
+        )
+        lon2 = lon1 + math.atan2(
+            math.sin(bearing) * math.sin(angular_distance) * math.cos(lat1),
+            math.cos(angular_distance) - math.sin(lat1) * math.sin(lat2),
+        )
+        coords.append([((math.degrees(lon2) + 540) % 360) - 180, math.degrees(lat2)])
+
+    return coords
+
+
+def render_travel_map(search_result: dict, current_lat: float, current_lon: float):
+    if pdk is None:
+        st.info("Map unavailable because pydeck is not installed in this environment.")
+        return
+
+    candidates = search_result.get("candidates", [])
+    if not candidates:
+        return
+
+    candidate_rows = []
+    for item in candidates:
+        score = safe_numeric(item.get("best_score"), 0) or 0
+        destination_name = item.get("destination_name") or "Coordinate candidate"
+        candidate_rows.append(
+            {
+                "lat": item.get("lat"),
+                "lon": item.get("lon"),
+                "score": score,
+                "time_label": item.get("time_label", "Unknown"),
+                "recommendation": item.get("recommendation", "Unknown"),
+                "distance_km": item.get("distance_km", 0),
+                "destination_name": destination_name,
+                "color": _score_color(score),
+                "radius": 450 + max(score, 0) * 18,
+            }
+        )
+
+    candidate_df = pd.DataFrame(candidate_rows).dropna(subset=["lat", "lon"])
+    layers = []
+
+    radius_km = safe_numeric(search_result.get("radius_km"), 0)
+    if radius_km:
+        layers.append(
+            pdk.Layer(
+                "PolygonLayer",
+                data=[{"polygon": _circle_polygon(current_lat, current_lon, radius_km)}],
+                get_polygon="polygon",
+                get_fill_color=[196, 120, 210, 20],
+                get_line_color=[196, 120, 210, 130],
+                line_width_min_pixels=2,
+                stroked=True,
+                filled=True,
+            )
+        )
+
+    layers.append(
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=pd.DataFrame([{
+                "lat": current_lat,
+                "lon": current_lon,
+                "label": "Current location",
+                "color": [228, 223, 240, 230],
+                "radius": 900,
+            }]),
+            id="current-location",
+            get_position="[lon, lat]",
+            get_color="color",
+            get_radius="radius",
+            pickable=True,
+        )
+    )
+
+    if not candidate_df.empty:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=candidate_df,
+                id="candidate-points",
+                get_position="[lon, lat]",
+                get_color="color",
+                get_radius="radius",
+                pickable=True,
+                auto_highlight=True,
+            )
+        )
+
+    destination = search_result.get("destination")
+    if destination:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=pd.DataFrame([{
+                    "lat": destination.get("lat"),
+                    "lon": destination.get("lon"),
+                    "destination_name": destination.get("name", "Selected destination"),
+                    "score": search_result.get("best_candidate", {}).get("best_score", 0),
+                    "time_label": search_result.get("best_candidate", {}).get("time_label", "Unknown"),
+                    "recommendation": search_result.get("best_candidate", {}).get("recommendation", "Unknown"),
+                    "distance_km": search_result.get("best_candidate", {}).get("distance_km", 0),
+                    "color": [255, 255, 255, 245],
+                    "radius": 1200,
+                }]).dropna(subset=["lat", "lon"]),
+                id="selected-destination",
+                get_position="[lon, lat]",
+                get_color="color",
+                get_radius="radius",
+                pickable=True,
+                auto_highlight=True,
+            )
+        )
+
+    chart = pdk.Deck(
+        map_style=None,
+        initial_view_state=pdk.ViewState(
+            latitude=current_lat,
+            longitude=current_lon,
+            zoom=8,
+            pitch=0,
+        ),
+        layers=layers,
+        tooltip={
+            "html": (
+                "<b>{destination_name}</b><br/>"
+                "Score: {score}<br/>"
+                "Window: {time_label}<br/>"
+                "Label: {recommendation}<br/>"
+                "Distance: {distance_km} km"
+            ),
+            "style": {"backgroundColor": "#100d1e", "color": "#e4dff0"},
+        },
+    )
+    st.pydeck_chart(chart, width="stretch", height=460)
+
+
+def render_score_explanation(row):
+    score = safe_numeric(row.get("stargazing_score"), 0) or 0
+    visibility = safe_numeric(row.get("visibility_penalty"), 0)
+    atmospheric = safe_numeric(row.get("atmospheric_score"), 0)
+    darkness = safe_numeric(row.get("effective_darkness"), 0)
+    cloud = safe_numeric(row.get("cloud_value"), None)
+    transparency = safe_numeric(row.get("transparency_value"), None)
+    seeing = safe_numeric(row.get("seeing_value"), None)
+    moon = safe_numeric(row.get("moon_illuminated_pct"), None)
+    bortle = safe_numeric(row.get("light_pollution_factor"), None)
+    bortle_text = f"{bortle * 9:.1f}" if bortle is not None else "N/A"
+
+    rows = [
+        ("Final score", f"{score:.1f}/100", "The overall score used to rank the window."),
+        ("Visibility penalty", f"{visibility:.2f}" if visibility is not None else "N/A", "Clouds and daylight can sharply reduce the score."),
+        ("Atmospheric quality", f"{atmospheric:.2f}" if atmospheric is not None else "N/A", "Transparency, seeing, and humidity shape clarity."),
+        ("Effective darkness", f"{darkness:.2f}" if darkness is not None else "N/A", "Moonlight and Bortle/light pollution reduce contrast."),
+        ("Cloud cover", f"{cloud:.0f}" if cloud is not None else "N/A", "Lower is better."),
+        ("Transparency / Seeing", f"{transparency} / {seeing}", "Lower raw values are better in the forecast feed."),
+        ("Moon illumination", f"{moon:.0f}%" if moon is not None else "N/A", "Brighter moonlight washes out faint targets."),
+        ("Estimated Bortle", bortle_text, "User-selected city lights index converted into the score."),
+    ]
+
+    html_rows = "".join(
+        f"""
+        <div class="inline-cell">
+            <div class="metric-card-title">{escape(label)}</div>
+            <div style="color:#e4dff0;font-size:1.05rem;font-weight:600;">{escape(value)}</div>
+            <p class="muted" style="margin:6px 0 0 0;">{escape(desc)}</p>
+        </div>
+        """
+        for label, value, desc in rows
+    )
+
+    st.markdown(
+        f"""
+        <div class="section-card">
+            <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Why This Score?</h3>
+            <p class="muted">This panel explains the top window using existing model columns. It does not change the score.</p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:12px;">
+                {html_rows}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2493,6 +2776,7 @@ with st.expander("Best Windows", expanded=_section_open("Best Windows")):
     for i, (_, row) in enumerate(top_windows.head(3).iterrows()):
         with cols[i]:
             render_window_card(i + 1, row)
+    render_score_explanation(best_row)
     fig_top = px.bar(
         top_windows.sort_values("stargazing_score"),
         x="stargazing_score", y="time_label",
@@ -2581,7 +2865,9 @@ with st.expander("AI Insight", expanded=_section_open("AI Insight")):
         "AI/RAG explains the fixed model output and searches the stargazing knowledge base. "
         "It does not change the score."
     )
-    insight_tab, search_tab = st.tabs(["Forecast AI Insight", "Semantic Knowledge Search"])
+    insight_tab, travel_tab, search_tab = st.tabs(
+        ["Forecast AI Insight", "Travel Plan", "Semantic Knowledge Search"]
+    )
     with insight_tab:
         if not include_llm:
             st.info("Turn on 'Generate AI recommendation' in the sidebar, then run again.")
@@ -2592,6 +2878,117 @@ with st.expander("AI Insight", expanded=_section_open("AI Insight")):
                 st.markdown('<div class="rag-box">', unsafe_allow_html=True)
                 st.markdown(answer)
                 st.markdown('</div>', unsafe_allow_html=True)
+    with travel_tab:
+        current_best_score = safe_numeric(best_score, 0)
+        st.markdown(
+            f"""
+            <div class="section-card">
+                <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Nearby Stargazing Trip</h3>
+                <p class="muted">
+                    Travel planning activates only when the current best score is at least
+                    <b style="color:#e4dff0;">{TRAVEL_PLAN_SCORE_THRESHOLD:.0f}/100</b>.
+                    Current best score:
+                    <b style="color:#e4dff0;">{current_best_score:.1f}/100</b>.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if current_best_score < TRAVEL_PLAN_SCORE_THRESHOLD:
+            st.info(
+                "The current score is not high enough for an AI travel plan yet. "
+                "Run this again when the forecast is Good or Excellent."
+            )
+        else:
+            radius_km = st.slider(
+                "Nearby search radius (km)",
+                min_value=25,
+                max_value=150,
+                value=75,
+                step=25,
+                key="travel_plan_radius_km",
+            )
+            max_candidates = st.slider(
+                "Candidate locations to score",
+                min_value=4,
+                max_value=16,
+                value=8,
+                step=4,
+                key="travel_plan_candidate_count",
+            )
+
+            if st.button("Find Best Nearby Stargazing Trip", width="stretch", type="primary", key="dashboard_generate_travel_plan"):
+                with st.status("Searching nearby forecast points...", expanded=True) as status:
+                    st.write(f"Scoring up to {int(max_candidates)} locations inside {int(radius_km)} km.")
+                    if include_llm:
+                        st.write("AI text generation is enabled; the final plan may use OpenAI.")
+                    else:
+                        st.write("AI text generation is off; a deterministic travel plan will be shown.")
+                    travel_result = cached_generate_travel_plan(
+                        result["llm_context"],
+                        bortle_index,
+                        days,
+                        float(radius_km),
+                        int(max_candidates),
+                        float(TRAVEL_PLAN_SCORE_THRESHOLD),
+                        bool(include_llm),
+                    )
+                    st.session_state["travel_result"] = travel_result
+                    status.update(label="Nearby travel search complete.", state="complete")
+
+            travel_result = st.session_state.get("travel_result")
+            if travel_result:
+                search = travel_result.get("search", {})
+                if search.get("status") != "eligible":
+                    st.info(search.get("reason", "Travel plan was not generated."))
+                else:
+                    best_candidate = search.get("best_candidate", {})
+                    destination = search.get("destination") or {}
+                    destination_name = destination.get("name") or "coordinate-based candidate"
+                    st.success(
+                        "Best nearby trip target: "
+                        f"{destination_name} · "
+                        f"{best_candidate.get('best_score', 0):.1f}/100"
+                    )
+
+                    candidate_df = pd.DataFrame(search.get("candidates", []))
+                    if not candidate_df.empty:
+                        display_cols = [c for c in [
+                            "best_score",
+                            "recommendation",
+                            "time_label",
+                            "distance_km",
+                            "destination_name",
+                            "destination_distance_km",
+                            "bearing_deg",
+                            "estimated_bortle_index",
+                            "lat",
+                            "lon",
+                            "weather_source",
+                        ] if c in candidate_df.columns]
+                        st.dataframe(
+                            candidate_df[display_cols].head(10),
+                            width="stretch",
+                            hide_index=True,
+                        )
+
+                    render_travel_map(
+                        search,
+                        current_lat=float(result.get("lat", 0)),
+                        current_lon=float(result.get("lon", 0)),
+                    )
+
+                    if search.get("candidate_errors"):
+                        st.caption(
+                            f"{len(search.get('candidate_errors', []))} nearby candidate(s) failed "
+                            "and were skipped; partial results are shown."
+                        )
+
+                    if travel_result.get("travel_plan"):
+                        st.markdown('<div class="rag-box">', unsafe_allow_html=True)
+                        st.markdown(travel_result["travel_plan"])
+                        st.markdown('</div>', unsafe_allow_html=True)
     with search_tab:
         user_question = st.text_area(
             "Ask the knowledge base",

@@ -9,10 +9,29 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
 import requests
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        return False
 
 from rag_utils import retrieve_context, format_retrieved_context
-from rag_vector_utils import retrieve_vector_context, format_vector_context
+
+try:
+    from rag_vector_utils import retrieve_vector_context, format_vector_context
+except Exception as rag_vector_import_error:
+    RAG_VECTOR_IMPORT_ERROR = str(rag_vector_import_error)
+
+    def retrieve_vector_context(*args, **kwargs):
+        raise RuntimeError(
+            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
+        )
+
+    def format_vector_context(*args, **kwargs):
+        raise RuntimeError(
+            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
+        )
 
 load_dotenv()
 
@@ -50,8 +69,12 @@ def get_secret(name):
 TAD_ACCESS_KEY = get_secret("ASTRO_ACCESS_KEY")
 TAD_SECRET_KEY = get_secret("ASTRO_SECRET_KEY")
 IPGEOLOC_API_KEY = get_secret("IPGEOLOC_API_KEY")
-IPSTACK_API_KEY = get_secret("IPSTACK_API_KEY")
 OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
+
+TRAVEL_PLAN_SCORE_THRESHOLD = 70.0
+OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
+_DESTINATION_CACHE = {}
+_TRAVEL_SCORE_CACHE = {}
 
 
 # ============================================================
@@ -116,42 +139,6 @@ def get_city_coordinates(city_name: str) -> Tuple[float, float, str]:
     tz = result.get("timezone", "UTC")
 
     return lat, lon, tz
-
-
-def get_location_from_ip() -> Tuple[float, float, str, str]:
-    """
-    Detect the caller's location using ipstack's /check endpoint.
-
-    Returns (lat, lon, city_label, timezone).
-    Raises ValueError if IPSTACK_API_KEY is not set or the lookup fails.
-    """
-    if not IPSTACK_API_KEY:
-        raise ValueError("Missing IPSTACK_API_KEY in .env")
-
-    url = "http://api.ipstack.com/check"
-    params = {"access_key": IPSTACK_API_KEY}
-
-    resp = requests.get(url, params=params, timeout=10)
-    resp.raise_for_status()
-
-    data = resp.json()
-
-    if data.get("success") is False:
-        info = data.get("error", {})
-        raise ValueError(
-            f"ipstack error {info.get('code')}: {info.get('info', 'unknown error')}"
-        )
-
-    lat = data.get("latitude")
-    lon = data.get("longitude")
-
-    if lat is None or lon is None:
-        raise ValueError("ipstack did not return coordinates.")
-
-    city = data.get("city") or data.get("region_name") or data.get("country_name") or "Detected Location"
-    tz = (data.get("time_zone") or {}).get("id") or "UTC"
-
-    return float(lat), float(lon), city, tz
 
 
 # ============================================================
@@ -1412,8 +1399,6 @@ def cluster_windows(score_df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
     Adds cluster_label and cluster_description columns.
     Does not modify stargazing_score.
     """
-    from scipy.cluster.vq import kmeans2
-
     FEATURE_COLS = [
         "cloud_value",
         "transparency_norm",
@@ -1446,13 +1431,32 @@ def cluster_windows(score_df: pd.DataFrame, k: int = 5) -> pd.DataFrame:
             out["cluster_description"] = "Insufficient feature diversity to cluster."
             return out
 
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message="One of the clusters is empty.*",
-                category=UserWarning,
-            )
-            _, labels = kmeans2(X_w, k_eff, seed=42, minit="++")
+        unique_points = np.unique(np.round(X_w, 6), axis=0)
+        rng = np.random.default_rng(42)
+        center_idx = rng.choice(len(unique_points), size=k_eff, replace=False)
+        centers = unique_points[center_idx].astype(float)
+
+        labels = np.zeros(len(X_w), dtype=int)
+        for _ in range(100):
+            distances = np.linalg.norm(X_w[:, None, :] - centers[None, :, :], axis=2)
+            new_labels = distances.argmin(axis=1)
+
+            new_centers = centers.copy()
+            for cid in range(k_eff):
+                members = X_w[new_labels == cid]
+                if len(members):
+                    new_centers[cid] = members.mean(axis=0)
+                else:
+                    farthest_idx = distances.min(axis=1).argmax()
+                    new_centers[cid] = X_w[farthest_idx]
+                    new_labels[farthest_idx] = cid
+
+            if np.array_equal(new_labels, labels) and np.allclose(new_centers, centers):
+                labels = new_labels
+                break
+
+            labels = new_labels
+            centers = new_centers
     except Exception:
         out["cluster_label"] = "Unknown"
         out["cluster_description"] = "Clustering unavailable for this forecast."
@@ -1789,6 +1793,662 @@ Mention fallback or approximation limits if relevant. Also state that AI/RAG exp
 
     except Exception as e:
         return f"Forecast AI insight failed: {e}"
+
+
+# ============================================================
+# AI TRAVEL PLAN / NEARBY LOCATION SEARCH
+# ============================================================
+
+def _context_best_score(context: Dict) -> Optional[float]:
+    top_windows = context.get("top_windows", []) if isinstance(context, dict) else []
+    if not top_windows:
+        return None
+
+    try:
+        return float(top_windows[0].get("stargazing_score"))
+    except Exception:
+        return None
+
+
+def _destination_point(lat: float, lon: float, distance_km: float, bearing_deg: float) -> Tuple[float, float]:
+    earth_radius_km = 6371.0
+    bearing = math.radians(bearing_deg)
+    lat1 = math.radians(lat)
+    lon1 = math.radians(lon)
+    angular_distance = distance_km / earth_radius_km
+
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(angular_distance)
+        + math.cos(lat1) * math.sin(angular_distance) * math.cos(bearing)
+    )
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing) * math.sin(angular_distance) * math.cos(lat1),
+        math.cos(angular_distance) - math.sin(lat1) * math.sin(lat2),
+    )
+
+    return math.degrees(lat2), ((math.degrees(lon2) + 540) % 360) - 180
+
+
+def _nearby_candidate_points(
+    lat: float,
+    lon: float,
+    radius_km: float,
+    max_candidates: int,
+) -> list:
+    if max_candidates <= 0 or radius_km <= 0:
+        return []
+
+    points = []
+    rings = [
+        (radius_km * 0.33, 4),
+        (radius_km * 0.66, 8),
+        (radius_km, 12),
+    ]
+
+    for distance_km, bearing_count in rings:
+        for idx in range(bearing_count):
+            if len(points) >= max_candidates:
+                return points
+            bearing = (360.0 / bearing_count) * idx
+            cand_lat, cand_lon = _destination_point(lat, lon, distance_km, bearing)
+            points.append(
+                {
+                    "lat": cand_lat,
+                    "lon": cand_lon,
+                    "distance_km": float(distance_km),
+                    "bearing_deg": float(bearing),
+                }
+            )
+
+    return points
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    earth_radius_km = 6371.0
+    d_lat = math.radians(lat2 - lat1)
+    d_lon = math.radians(lon2 - lon1)
+    lat1_rad = math.radians(lat1)
+    lat2_rad = math.radians(lat2)
+
+    a = (
+        math.sin(d_lat / 2) ** 2
+        + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(d_lon / 2) ** 2
+    )
+    return earth_radius_km * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _destination_suitability_score(tags: Dict, distance_km: float) -> float:
+    tags = tags or {}
+    score = max(0.0, 25.0 - distance_km)
+
+    if tags.get("boundary") == "protected_area":
+        score += 14
+    if tags.get("leisure") in {"nature_reserve", "park", "recreation_ground"}:
+        score += 12
+    if tags.get("tourism") in {"viewpoint", "camp_site", "picnic_site"}:
+        score += 11
+    if tags.get("natural") in {"beach", "wood", "grassland", "heath"}:
+        score += 8
+    if tags.get("landuse") in {"forest", "meadow", "grass", "recreation_ground"}:
+        score += 7
+    if tags.get("access") in {"private", "no"}:
+        score -= 25
+    if tags.get("landuse") in {"industrial", "commercial", "retail"}:
+        score -= 15
+
+    return score
+
+
+def _osm_element_lat_lon(element: Dict) -> Tuple[Optional[float], Optional[float]]:
+    lat = element.get("lat")
+    lon = element.get("lon")
+
+    if lat is not None and lon is not None:
+        return float(lat), float(lon)
+
+    center = element.get("center") or {}
+    if center.get("lat") is not None and center.get("lon") is not None:
+        return float(center["lat"]), float(center["lon"])
+
+    return None, None
+
+
+def resolve_nearby_public_destinations(
+    lat: float,
+    lon: float,
+    radius_km: float = 10,
+) -> list:
+    """
+    Resolve useful public-ish stargazing destinations near a coordinate.
+
+    Uses OpenStreetMap's public Overpass API. Failures return [] so travel
+    planning can fall back to coordinate-based recommendations.
+    """
+    cache_key = (round(float(lat), 3), round(float(lon), 3), round(float(radius_km), 1))
+    if cache_key in _DESTINATION_CACHE:
+        return _DESTINATION_CACHE[cache_key]
+
+    radius_m = int(max(1000, min(float(radius_km), 25.0) * 1000))
+    query = f"""
+    [out:json][timeout:12];
+    (
+      node(around:{radius_m},{lat},{lon})["leisure"~"^(park|nature_reserve|recreation_ground)$"];
+      way(around:{radius_m},{lat},{lon})["leisure"~"^(park|nature_reserve|recreation_ground)$"];
+      relation(around:{radius_m},{lat},{lon})["leisure"~"^(park|nature_reserve|recreation_ground)$"];
+      node(around:{radius_m},{lat},{lon})["tourism"~"^(viewpoint|camp_site|picnic_site)$"];
+      way(around:{radius_m},{lat},{lon})["tourism"~"^(viewpoint|camp_site|picnic_site)$"];
+      relation(around:{radius_m},{lat},{lon})["tourism"~"^(viewpoint|camp_site|picnic_site)$"];
+      node(around:{radius_m},{lat},{lon})["natural"~"^(beach|wood|grassland|heath)$"];
+      way(around:{radius_m},{lat},{lon})["natural"~"^(beach|wood|grassland|heath)$"];
+      relation(around:{radius_m},{lat},{lon})["natural"~"^(beach|wood|grassland|heath)$"];
+      node(around:{radius_m},{lat},{lon})["boundary"="protected_area"];
+      way(around:{radius_m},{lat},{lon})["boundary"="protected_area"];
+      relation(around:{radius_m},{lat},{lon})["boundary"="protected_area"];
+      node(around:{radius_m},{lat},{lon})["information"="trailhead"];
+    );
+    out center tags 50;
+    """
+
+    try:
+        resp = requests.post(
+            OVERPASS_API_URL,
+            data={"data": query},
+            timeout=15,
+            headers={"User-Agent": "stargazing-assistant-final-project/1.0"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"Overpass destination lookup failed: {e}")
+        _DESTINATION_CACHE[cache_key] = []
+        return []
+
+    destinations = []
+    seen = set()
+    for element in data.get("elements", []):
+        tags = element.get("tags") or {}
+        elem_lat, elem_lon = _osm_element_lat_lon(element)
+        if elem_lat is None or elem_lon is None:
+            continue
+
+        if tags.get("access") in {"private", "no"}:
+            continue
+
+        osm_key = (element.get("type"), element.get("id"))
+        if osm_key in seen:
+            continue
+        seen.add(osm_key)
+
+        distance_from_candidate_km = _haversine_km(lat, lon, elem_lat, elem_lon)
+        name = (
+            tags.get("name")
+            or tags.get("official_name")
+            or tags.get("operator")
+            or "Unnamed public outdoor area"
+        )
+
+        destinations.append(
+            {
+                "name": name,
+                "lat": elem_lat,
+                "lon": elem_lon,
+                "osm_type": element.get("type"),
+                "osm_id": element.get("id"),
+                "tags": tags,
+                "distance_from_candidate_km": distance_from_candidate_km,
+                "suitability_score": _destination_suitability_score(
+                    tags,
+                    distance_from_candidate_km,
+                ),
+            }
+        )
+
+    destinations = sorted(
+        destinations,
+        key=lambda item: (item["suitability_score"], -item["distance_from_candidate_km"]),
+        reverse=True,
+    )
+    _DESTINATION_CACHE[cache_key] = destinations
+    return destinations
+
+
+def _osm_darkness_adjustment(destination: Optional[Dict]) -> float:
+    if not destination:
+        return 0.0
+
+    tags = destination.get("tags") or {}
+    adjustment = 0.0
+
+    if tags.get("boundary") == "protected_area":
+        adjustment += 0.5
+    if tags.get("leisure") == "nature_reserve":
+        adjustment += 0.45
+    elif tags.get("leisure") in {"park", "recreation_ground"}:
+        adjustment += 0.2
+    if tags.get("tourism") in {"viewpoint", "camp_site"}:
+        adjustment += 0.35
+    if tags.get("natural") in {"wood", "grassland", "heath", "beach"}:
+        adjustment += 0.25
+    if tags.get("landuse") in {"industrial", "commercial", "retail"}:
+        adjustment -= 0.5
+    if tags.get("landuse") == "residential":
+        adjustment -= 0.25
+
+    return adjustment
+
+
+def _estimate_travel_bortle(
+    base_bortle_index: float,
+    distance_km: float,
+    destination: Optional[Dict] = None,
+) -> float:
+    """
+    Estimate nearby sky brightness from baseline Bortle, distance, and OSM
+    public/outdoor land-use signals. This is still an estimate, not a light map.
+    """
+    base = float(base_bortle_index)
+    improvement = (distance_km / 40.0) + _osm_darkness_adjustment(destination)
+    return float(np.clip(base - improvement, 1.0, 9.0))
+
+
+def _score_candidate_forecast(
+    point: Dict,
+    timezone: str,
+    days: int,
+    start_date: datetime,
+    candidate_bortle: float,
+) -> Optional[Dict]:
+    cache_key = (
+        round(float(point["lat"]), 3),
+        round(float(point["lon"]), 3),
+        timezone,
+        int(days),
+        round(float(candidate_bortle), 2),
+    )
+    if cache_key in _TRAVEL_SCORE_CACHE:
+        return _TRAVEL_SCORE_CACHE[cache_key]
+
+    weather_df, weather_source = fetch_weather_forecast_with_fallback(
+        lat=point["lat"],
+        lon=point["lon"],
+        timezone=timezone,
+        days=days,
+    )
+    astronomy_df = build_fallback_astronomy_df(
+        start_date=start_date,
+        days=days,
+    )
+    master_df = build_master_df(
+        weather_df=weather_df,
+        ip_geo_df=astronomy_df,
+        event_df=pd.DataFrame(),
+        timezone=timezone,
+    )
+    score_df = score_stargazing_windows(
+        master_df=master_df,
+        bortle_index=candidate_bortle,
+    )
+    top_window = get_top_windows(score_df, n=1)
+
+    if top_window is None or top_window.empty:
+        return None
+
+    row = top_window.iloc[0]
+    scored = {
+        "best_score": float(row.get("stargazing_score", 0)),
+        "recommendation": row.get("recommendation", "Unknown"),
+        "time_label": row.get("time_label", "Unknown"),
+        "cloud_value": _safe_float(row.get("cloud_value")),
+        "transparency_value": _safe_float(row.get("transparency_value")),
+        "seeing_value": _safe_float(row.get("seeing_value")),
+        "moon_illuminated_pct": _safe_float(row.get("moon_illuminated_pct")),
+        "weather_source": weather_source,
+        "astronomy_source": "Simple astronomy fallback",
+    }
+    _TRAVEL_SCORE_CACHE[cache_key] = scored
+    return scored
+
+
+def search_nearby_stargazing_locations(
+    context: Dict,
+    bortle_index: float,
+    days: int = 4,
+    radius_km: float = 75.0,
+    max_candidates: int = 12,
+    score_threshold: float = TRAVEL_PLAN_SCORE_THRESHOLD,
+) -> Dict:
+    compact_context = _compact_context_for_ai(context)
+    current_score = _context_best_score(compact_context)
+
+    if current_score is None:
+        return {
+            "status": "not_eligible",
+            "reason": "No current stargazing score is available yet.",
+            "current_score": None,
+            "score_threshold": score_threshold,
+            "candidates": [],
+            "best_candidate": None,
+        }
+
+    if current_score < score_threshold:
+        return {
+            "status": "not_eligible",
+            "reason": (
+                f"Current best score is {current_score:.1f}/100, below the "
+                f"{score_threshold:.0f}/100 travel-plan threshold."
+            ),
+            "current_score": current_score,
+            "score_threshold": score_threshold,
+            "candidates": [],
+            "best_candidate": None,
+        }
+
+    lat = compact_context.get("lat")
+    lon = compact_context.get("lon")
+    timezone = compact_context.get("timezone") or "UTC"
+
+    if lat is None or lon is None:
+        return {
+            "status": "not_eligible",
+            "reason": "No current latitude/longitude is available for nearby search.",
+            "current_score": current_score,
+            "score_threshold": score_threshold,
+            "candidates": [],
+            "best_candidate": None,
+        }
+
+    start_date = datetime.now()
+    candidates = []
+    candidate_errors = []
+
+    for point in _nearby_candidate_points(
+        lat=float(lat),
+        lon=float(lon),
+        radius_km=float(radius_km),
+        max_candidates=int(max_candidates),
+    ):
+        try:
+            destinations = resolve_nearby_public_destinations(
+                lat=point["lat"],
+                lon=point["lon"],
+                radius_km=min(10.0, max(3.0, float(radius_km) / 8.0)),
+            )
+            destination = destinations[0] if destinations else None
+            candidate_bortle = _estimate_travel_bortle(
+                bortle_index,
+                point["distance_km"],
+                destination=destination,
+            )
+            scored = _score_candidate_forecast(
+                point=point,
+                timezone=timezone,
+                days=days,
+                start_date=start_date,
+                candidate_bortle=candidate_bortle,
+            )
+
+            if scored is None:
+                continue
+
+            candidates.append(
+                {
+                    "lat": point["lat"],
+                    "lon": point["lon"],
+                    "distance_km": point["distance_km"],
+                    "bearing_deg": point["bearing_deg"],
+                    "estimated_bortle_index": candidate_bortle,
+                    "destination": destination,
+                    "destination_name": destination.get("name") if destination else None,
+                    "destination_lat": destination.get("lat") if destination else None,
+                    "destination_lon": destination.get("lon") if destination else None,
+                    "destination_distance_km": (
+                        destination.get("distance_from_candidate_km")
+                        if destination
+                        else None
+                    ),
+                    **scored,
+                }
+            )
+        except Exception as e:
+            print(f"Nearby stargazing candidate failed: {e}")
+            candidate_errors.append(str(e))
+            continue
+
+    if not candidates:
+        return {
+            "status": "no_candidates",
+            "reason": "Nearby search did not return any scorable candidate locations.",
+            "current_score": current_score,
+            "score_threshold": score_threshold,
+            "radius_km": radius_km,
+            "candidate_errors": candidate_errors,
+            "candidates": [],
+            "best_candidate": None,
+            "destination": None,
+        }
+
+    candidates = sorted(candidates, key=lambda item: item["best_score"], reverse=True)
+    best_candidate = candidates[0]
+
+    return {
+        "status": "eligible",
+        "reason": "Current score is high enough for nearby travel planning.",
+        "current_score": current_score,
+        "score_threshold": score_threshold,
+        "radius_km": radius_km,
+        "candidate_count": len(candidates),
+        "candidate_errors": candidate_errors,
+        "candidates": candidates,
+        "best_candidate": best_candidate,
+        "destination": best_candidate.get("destination"),
+    }
+
+
+def _safe_float(value):
+    try:
+        if pd.isna(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
+
+
+def generate_stargazing_travel_plan(
+    context: Dict,
+    search_result: Dict,
+) -> str:
+    if search_result.get("status") != "eligible":
+        return (
+            "Travel plan not generated. "
+            f"{search_result.get('reason', 'The current score is not eligible.')}"
+        )
+
+    best_candidate = search_result.get("best_candidate") or {}
+    destination = search_result.get("destination") or best_candidate.get("destination")
+    compact_context = _compact_context_for_ai(context)
+
+    if not OPENAI_API_KEY:
+        return _build_deterministic_travel_plan(compact_context, search_result)
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        retrieval_query = f"""
+Stargazing travel planning advice.
+Current score: {search_result.get("current_score")}
+Best nearby score: {best_candidate.get("best_score")}
+Nearby location: {best_candidate.get("lat")}, {best_candidate.get("lon")}
+Resolved destination: {json.dumps(destination, default=str)}
+Concepts: dark sky travel, Bortle scale, local stargazing trip, moonlight,
+cloud cover, transparency, seeing, safety planning, choosing observing sites.
+"""
+        retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
+            retrieval_query,
+            top_k=5,
+        )
+
+        prompt = f"""
+You are a stargazing travel-planning assistant.
+
+Task:
+Create a practical travel plan from the user's current forecast location to the
+best nearby stargazing candidate found by the app.
+
+Rules:
+- Do not recalculate or change any score.
+- Use only the score and candidate facts provided below.
+- Do not claim the candidate is an official park, observatory, or named dark-sky site.
+- If a destination object is provided, refer to its OSM name and coordinates.
+- If no destination object is provided, refer to the destination by coordinates.
+- Explain that nearby light pollution/Bortle is estimated, not measured from a map.
+- Keep driving and safety advice general; do not invent roads, closures, fees, or exact travel times.
+- Focus on where to go, why it is better, when to go, what to bring, and how to decide if the trip is worth it.
+- Use markdown with clear headings and concise bullets.
+
+Current forecast context:
+{json.dumps(compact_context, default=str, indent=2)}
+
+Nearby search result:
+{json.dumps(search_result, default=str, indent=2)}
+
+RAG retrieval mode:
+{rag_mode}
+
+Retrieved stargazing knowledge:
+{retrieved_context}
+
+Write the answer in this markdown structure:
+
+## Travel Recommendation
+State whether the user should consider traveling and summarize the best nearby coordinate.
+
+## Why This Spot Is Better
+Compare current best score and nearby best score. Explain the forecast factors.
+
+## When To Go
+Use the best candidate time window and recommendation label.
+
+## Trip Plan
+Give practical planning steps.
+
+## What To Bring
+Give concise gear and comfort recommendations.
+
+## Caveats
+Mention estimated Bortle/light pollution, fallback astronomy data, and that AI explains the deterministic search.
+
+## Retrieved Sources
+{retrieved_sources_text}
+"""
+
+        response = client.responses.create(
+            model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+            input=prompt,
+        )
+
+        return response.output_text
+
+    except Exception as e:
+        fallback = _build_deterministic_travel_plan(compact_context, search_result)
+        return f"{fallback}\n\n_AI travel-plan generation failed: {e}_"
+
+
+def _build_deterministic_travel_plan(context: Dict, search_result: Dict) -> str:
+    best = search_result.get("best_candidate") or {}
+    destination = search_result.get("destination") or best.get("destination") or {}
+    current_score = search_result.get("current_score")
+    current_label = "current location"
+    if context.get("city"):
+        current_label = str(context["city"])
+    destination_name = destination.get("name") or "the nearby candidate area"
+    destination_lat = (
+        destination.get("lat")
+        if destination.get("lat") is not None
+        else best.get("lat", 0)
+    )
+    destination_lon = (
+        destination.get("lon")
+        if destination.get("lon") is not None
+        else best.get("lon", 0)
+    )
+    destination_distance = destination.get("distance_from_candidate_km")
+    destination_note = ""
+    if destination_distance is not None:
+        destination_note = (
+            f"- The selected public outdoor destination is about "
+            f"`{destination_distance:.1f} km` from the highest-scoring forecast point.\n"
+        )
+
+    return f"""
+## Travel Recommendation
+- Consider traveling from {current_label} toward **{destination_name}** at `{destination_lat:.4f}, {destination_lon:.4f}`.
+- Current best score: `{current_score:.1f}/100`.
+- Nearby best score: `{best.get("best_score", 0):.1f}/100`.
+{destination_note}
+
+## Why This Spot Is Better
+- It is about `{best.get("distance_km", 0):.1f} km` away inside the search radius.
+- Estimated Bortle index improves to `{best.get("estimated_bortle_index", 0):.1f}` using distance plus OpenStreetMap outdoor-place signals when available.
+- Forecast factors: cloud `{best.get("cloud_value")}`, transparency `{best.get("transparency_value")}`, seeing `{best.get("seeing_value")}`.
+
+## When To Go
+- Best nearby window: `{best.get("time_label", "Unknown")}`.
+- Recommendation label: `{best.get("recommendation", "Unknown")}`.
+
+## Trip Plan
+- Check **{destination_name}** on a map and confirm it is safe and legally accessible at night.
+- Re-run the forecast shortly before leaving.
+- Arrive before the best window so your eyes can dark-adapt.
+- Keep a backup plan if clouds move in.
+
+## What To Bring
+- Warm layers, water, a red flashlight, a charged phone, and a simple sky map.
+- Binoculars or a small telescope are optional; the naked eye is enough for basic skywatching.
+
+## Caveats
+- Nearby Bortle/light-pollution is estimated, not measured from a live map.
+- Nearby astronomy values use the app's fallback approximation because moon/twilight timing changes very little across this radius.
+- This plan explains deterministic score output; it does not change the score.
+"""
+
+
+def generate_travel_plan_for_current_forecast(
+    context: Dict,
+    bortle_index: float,
+    days: int = 4,
+    radius_km: float = 75.0,
+    max_candidates: int = 12,
+    score_threshold: float = TRAVEL_PLAN_SCORE_THRESHOLD,
+    use_ai_text: bool = True,
+) -> Dict:
+    search_result = search_nearby_stargazing_locations(
+        context=context,
+        bortle_index=bortle_index,
+        days=days,
+        radius_km=radius_km,
+        max_candidates=max_candidates,
+        score_threshold=score_threshold,
+    )
+
+    travel_plan = None
+    if search_result.get("status") == "eligible":
+        if use_ai_text:
+            travel_plan = generate_stargazing_travel_plan(
+                context=context,
+                search_result=search_result,
+            )
+        else:
+            travel_plan = _build_deterministic_travel_plan(
+                _compact_context_for_ai(context),
+                search_result,
+            )
+
+    return {
+        "search": search_result,
+        "travel_plan": travel_plan,
+    }
 
 
 def answer_semantic_knowledge_question(

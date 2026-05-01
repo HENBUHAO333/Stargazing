@@ -3,7 +3,7 @@ import json
 import warnings
 import math
 from datetime import datetime, timedelta
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -12,8 +12,8 @@ import requests
 
 try:
     from dotenv import load_dotenv
-except Exception:
-    def load_dotenv(*args, **kwargs):
+except ImportError:
+    def load_dotenv():
         return False
 
 from rag_utils import retrieve_context, format_retrieved_context
@@ -22,8 +22,16 @@ try:
     from rag_vector_utils import retrieve_vector_context, format_vector_context
 except Exception as rag_vector_import_error:
     RAG_VECTOR_IMPORT_ERROR = str(rag_vector_import_error)
-    retrieve_vector_context = None
-    format_vector_context = None
+
+    def retrieve_vector_context(*args, **kwargs):
+        raise RuntimeError(
+            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
+        )
+
+    def format_vector_context(*args, **kwargs):
+        raise RuntimeError(
+            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
+        )
 
 load_dotenv()
 
@@ -45,18 +53,6 @@ def get_secret(name):
     if value:
         return value
 
-    try:
-        with open(".env", "r", encoding="utf-8") as env_file:
-            for raw_line in env_file:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, raw_value = line.split("=", 1)
-                if key.strip() == name:
-                    return raw_value.strip().strip('"').strip("'")
-    except Exception:
-        pass
-
     if st is not None:
         try:
             return st.secrets.get(name)
@@ -74,7 +70,6 @@ TAD_ACCESS_KEY = get_secret("ASTRO_ACCESS_KEY")
 TAD_SECRET_KEY = get_secret("ASTRO_SECRET_KEY")
 IPGEOLOC_API_KEY = get_secret("IPGEOLOC_API_KEY")
 OPENAI_API_KEY = get_secret("OPENAI_API_KEY")
-METEOBLUE_API_KEY = get_secret("METEOBLUE_API_KEY")
 
 TRAVEL_PLAN_SCORE_THRESHOLD = 70.0
 OVERPASS_API_URL = "https://overpass-api.de/api/interpreter"
@@ -321,383 +316,22 @@ def fetch_open_meteo_forecast(
     return df[keep_cols]
 
 
-def fetch_open_meteo_air_quality(
-    lat: float,
-    lon: float,
-    timezone: str = "UTC",
-    days: int = 4,
-) -> pd.DataFrame:
-    """
-    Free no-key haze validation layer from Open-Meteo Air Quality.
-
-    Aerosol optical depth is a closer proxy for sky transparency/haze than
-    surface visibility alone. PM2.5 is not an astronomy variable, but it helps
-    flag smoke/pollution nights where nominal weather visibility can be
-    misleading.
-    """
-
-    url = "https://air-quality-api.open-meteo.com/v1/air-quality"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": ["aerosol_optical_depth", "pm2_5", "dust"],
-        "forecast_days": int(days),
-        "timezone": "UTC",
-    }
-
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
-
-    hourly = resp.json().get("hourly", {})
-    if not hourly or "time" not in hourly:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(hourly)
-    df["utcForecastHour"] = pd.to_datetime(df["time"], utc=True, errors="coerce")
-    df = df.dropna(subset=["utcForecastHour"])
-
-    for col in ["aerosol_optical_depth", "pm2_5", "dust"]:
-        if col not in df.columns:
-            df[col] = np.nan
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df[["utcForecastHour", "aerosol_optical_depth", "pm2_5", "dust"]]
-
-
-def _estimate_dewpoint_celsius(temp_c: pd.Series, relative_humidity: pd.Series) -> pd.Series:
-    temp_c = pd.to_numeric(temp_c, errors="coerce")
-    rh = pd.to_numeric(relative_humidity, errors="coerce").clip(1, 100)
-    a = 17.625
-    b = 243.04
-    gamma = np.log(rh / 100.0) + (a * temp_c) / (b + temp_c)
-    return (b * gamma) / (a - gamma)
-
-
-def _meteoblue_seeing_proxy(windspeed_ms: pd.Series, lifted_index: pd.Series) -> pd.Series:
-    """
-    Conservative 1-good / 5-bad seeing proxy.
-
-    The queried Meteoblue package gives stability and wind context, not the
-    dedicated Astronomy Seeing index. Keep this as a proxy and expose that in
-    validation metadata.
-    """
-    wind = pd.to_numeric(windspeed_ms, errors="coerce")
-    lifted = pd.to_numeric(lifted_index, errors="coerce")
-
-    wind_quality = 1 - ((wind.clip(1, 12) - 1) / 11)
-    stability_quality = ((lifted.clip(-2, 8) + 2) / 10)
-    quality = (0.60 * wind_quality + 0.40 * stability_quality).fillna(0.50)
-    return (5 - 4 * quality).clip(1, 5)
-
-
-def fetch_meteoblue_forecast(
-    lat: float,
-    lon: float,
-    timezone: str = "UTC",
-    days: int = 4,
-) -> pd.DataFrame:
-    """
-    Realtime Meteoblue validation/enrichment feed.
-
-    Uses packages available in the Forecast API:
-    - basic-1h: temperature, humidity, wind, visibility
-    - clouds-1h: total/low/mid/high clouds
-    - air-1h: stability indices useful as a weak seeing proxy
-    """
-    if not METEOBLUE_API_KEY:
-        return pd.DataFrame()
-
-    url = "https://my.meteoblue.com/packages/basic-1h_clouds-1h_air-1h"
-    params = {
-        "lat": lat,
-        "lon": lon,
-        "apikey": METEOBLUE_API_KEY,
-        "forecast_days": int(days),
-        "tz": timezone or "UTC",
-    }
-
-    resp = requests.get(url, params=params, timeout=30)
-    resp.raise_for_status()
-    payload = resp.json()
-
-    if payload.get("error_message"):
-        raise ValueError(f"Meteoblue error: {payload.get('error_message')}")
-
-    data = payload.get("data_1h", {})
-    if not data or "time" not in data:
-        return pd.DataFrame()
-
-    df = pd.DataFrame(data)
-    df["utcForecastHour"] = pd.to_datetime(
-        df["time"],
-        utc=True,
-        errors="coerce",
-    )
-    df = df.dropna(subset=["utcForecastHour"])
-
-    if df.empty:
-        return pd.DataFrame()
-
-    for col in [
-        "totalcloudcover",
-        "lowclouds",
-        "midclouds",
-        "highclouds",
-        "visibility",
-        "relativehumidity",
-        "temperature",
-        "windspeed",
-        "liftedindex",
-        "k_index",
-        "fog_probability",
-    ]:
-        if col not in df.columns:
-            df[col] = np.nan
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    visibility_km = df["visibility"] / 1000.0
-    df["meteoblue_transparency_value"] = (
-        5 - (visibility_km.clip(0, 25) / 25 * 4)
-    ).clip(1, 5)
-    df["meteoblue_seeing_proxy_value"] = _meteoblue_seeing_proxy(
-        df["windspeed"],
-        df["liftedindex"],
-    )
-    df["meteoblue_dewpoint_value"] = _estimate_dewpoint_celsius(
-        df["temperature"],
-        df["relativehumidity"],
-    )
-
-    out = pd.DataFrame(
-        {
-            "utcForecastHour": df["utcForecastHour"],
-            "meteoblue_cloud_value": df["totalcloudcover"],
-            "meteoblue_low_clouds": df["lowclouds"],
-            "meteoblue_mid_clouds": df["midclouds"],
-            "meteoblue_high_clouds": df["highclouds"],
-            "meteoblue_visibility_m": df["visibility"],
-            "meteoblue_transparency_value": df["meteoblue_transparency_value"],
-            "meteoblue_seeing_proxy_value": df["meteoblue_seeing_proxy_value"],
-            "meteoblue_relativehumidity": df["relativehumidity"],
-            "meteoblue_temperature_value": df["temperature"],
-            "meteoblue_dewpoint_value": df["meteoblue_dewpoint_value"],
-            "meteoblue_wind_value": df["windspeed"],
-            "meteoblue_liftedindex": df["liftedindex"],
-            "meteoblue_k_index": df["k_index"],
-            "meteoblue_fog_probability": df["fog_probability"],
-        }
-    )
-
-    return out
-
-
-def build_weather_from_meteoblue(meteoblue_df: pd.DataFrame) -> pd.DataFrame:
-    if meteoblue_df is None or meteoblue_df.empty:
-        return pd.DataFrame()
-
-    df = meteoblue_df.copy()
-    df["hourOffset"] = range(len(df))
-    df["cloud_value"] = df["meteoblue_cloud_value"]
-    df["transparency_value"] = df["meteoblue_transparency_value"]
-    df["seeing_value"] = df["meteoblue_seeing_proxy_value"]
-    df["temperature_value"] = df["meteoblue_temperature_value"]
-    df["dewPoint_value"] = df["meteoblue_dewpoint_value"]
-    df["wind_value"] = df["meteoblue_wind_value"]
-
-    for col in [
-        "seeing_color",
-        "transparency_color",
-        "cloud_color",
-        "temperature_color",
-        "dewPoint_color",
-        "wind_color",
-    ]:
-        df[col] = None
-
-    keep_cols = [
-        "utcForecastHour",
-        "hourOffset",
-        "seeing_value",
-        "seeing_color",
-        "transparency_value",
-        "transparency_color",
-        "cloud_value",
-        "cloud_color",
-        "temperature_value",
-        "temperature_color",
-        "dewPoint_value",
-        "dewPoint_color",
-        "wind_value",
-        "wind_color",
-    ] + [c for c in df.columns if c.startswith("meteoblue_")]
-
-    return df[keep_cols]
-
-
-def enrich_weather_with_meteoblue(
-    weather_df: pd.DataFrame,
-    lat: float,
-    lon: float,
-    timezone: str,
-    days: int,
-) -> Tuple[pd.DataFrame, bool]:
-    if weather_df is None or weather_df.empty:
-        return weather_df, False
-
-    try:
-        meteoblue_df = fetch_meteoblue_forecast(
-            lat=lat,
-            lon=lon,
-            timezone=timezone,
-            days=days,
-        )
-    except Exception as e:
-        print(f"Meteoblue enrichment failed. Continuing without Meteoblue. Error: {e}")
-        return weather_df, False
-
-    if meteoblue_df is None or meteoblue_df.empty:
-        return weather_df, False
-
-    out = weather_df.copy()
-    out["utcForecastHour"] = pd.to_datetime(
-        out["utcForecastHour"],
-        utc=True,
-        errors="coerce",
-    ).dt.floor("h")
-    mb = meteoblue_df.copy()
-    mb["utcForecastHour"] = pd.to_datetime(
-        mb["utcForecastHour"],
-        utc=True,
-        errors="coerce",
-    ).dt.floor("h")
-    out = out.merge(mb, on="utcForecastHour", how="left")
-
-    if "meteoblue_cloud_value" in out.columns:
-        primary_cloud = pd.to_numeric(out["cloud_value"], errors="coerce")
-        mb_cloud = pd.to_numeric(out["meteoblue_cloud_value"], errors="coerce")
-        out["cloud_model_delta"] = (primary_cloud - mb_cloud).abs()
-        out["cloud_value"] = (0.60 * primary_cloud + 0.40 * mb_cloud).combine_first(primary_cloud)
-
-    if "meteoblue_transparency_value" in out.columns:
-        primary_trans = pd.to_numeric(out["transparency_value"], errors="coerce")
-        mb_trans = pd.to_numeric(out["meteoblue_transparency_value"], errors="coerce")
-        out["transparency_model_delta"] = (primary_trans - mb_trans).abs()
-        out["transparency_value"] = (
-            0.65 * primary_trans + 0.35 * mb_trans
-        ).combine_first(primary_trans)
-
-    if "meteoblue_seeing_proxy_value" in out.columns:
-        out["seeing_value"] = pd.to_numeric(
-            out["seeing_value"],
-            errors="coerce",
-        ).fillna(out["meteoblue_seeing_proxy_value"])
-
-    for target, source in [
-        ("temperature_value", "meteoblue_temperature_value"),
-        ("dewPoint_value", "meteoblue_dewpoint_value"),
-        ("wind_value", "meteoblue_wind_value"),
-    ]:
-        if source in out.columns:
-            out[target] = pd.to_numeric(out[target], errors="coerce").fillna(out[source])
-
-    out["meteoblue_validation_available"] = out["meteoblue_cloud_value"].notna()
-    return out, True
-
-
-def enrich_weather_with_air_quality(
-    weather_df: pd.DataFrame,
-    lat: float,
-    lon: float,
-    timezone: str,
-    days: int,
-) -> Tuple[pd.DataFrame, bool]:
-    if weather_df is None or weather_df.empty:
-        return weather_df, False
-
-    try:
-        aq_df = fetch_open_meteo_air_quality(
-            lat=lat,
-            lon=lon,
-            timezone=timezone,
-            days=days,
-        )
-    except Exception as e:
-        print(f"Open-Meteo air quality enrichment failed. Error: {e}")
-        return weather_df, False
-
-    if aq_df is None or aq_df.empty:
-        return weather_df, False
-
-    out = weather_df.copy()
-    out["utcForecastHour"] = pd.to_datetime(
-        out["utcForecastHour"],
-        utc=True,
-        errors="coerce",
-    )
-    out = out.merge(aq_df, on="utcForecastHour", how="left")
-    return out, True
-
-
 def fetch_weather_forecast_with_fallback(
     lat: float,
     lon: float,
     timezone: str = "UTC",
     days: int = 4,
 ) -> Tuple[pd.DataFrame, str]:
-    source = "Open-Meteo fallback"
-
     try:
         weather_df = fetch_astrospheric_forecast(lat, lon)
 
         if weather_df is not None and not weather_df.empty:
-            source = "Astrospheric"
-            weather_df, has_meteoblue = enrich_weather_with_meteoblue(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_meteoblue:
-                source = f"{source} + Meteoblue Validation"
-            enriched_df, has_air_quality = enrich_weather_with_air_quality(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_air_quality:
-                source = f"{source} + Open-Meteo Air Quality"
-            return enriched_df, source
+            return weather_df, "Astrospheric"
 
         print("Astrospheric returned empty data. Falling back to Open-Meteo.")
 
     except Exception as e:
         print(f"Astrospheric failed. Falling back to Open-Meteo. Error: {e}")
-
-    try:
-        meteoblue_df = fetch_meteoblue_forecast(
-            lat=lat,
-            lon=lon,
-            timezone=timezone,
-            days=days,
-        )
-        if meteoblue_df is not None and not meteoblue_df.empty:
-            weather_df = build_weather_from_meteoblue(meteoblue_df)
-            source = "Meteoblue realtime"
-            weather_df, has_air_quality = enrich_weather_with_air_quality(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_air_quality:
-                source = f"{source} + Open-Meteo Air Quality"
-            return weather_df, source
-    except Exception as e:
-        print(f"Meteoblue failed. Falling back to Open-Meteo. Error: {e}")
 
     weather_df = fetch_open_meteo_forecast(
         lat=lat,
@@ -706,27 +340,7 @@ def fetch_weather_forecast_with_fallback(
         days=days,
     )
 
-    weather_df, has_meteoblue = enrich_weather_with_meteoblue(
-        weather_df=weather_df,
-        lat=lat,
-        lon=lon,
-        timezone=timezone,
-        days=days,
-    )
-    if has_meteoblue:
-        source = f"{source} + Meteoblue Validation"
-
-    weather_df, has_air_quality = enrich_weather_with_air_quality(
-        weather_df=weather_df,
-        lat=lat,
-        lon=lon,
-        timezone=timezone,
-        days=days,
-    )
-    if has_air_quality:
-        source = f"{source} + Air Quality"
-
-    return weather_df, source
+    return weather_df, "Open-Meteo fallback"
 
 
 # ============================================================
@@ -1446,76 +1060,8 @@ def build_master_df(
     return master_df
 
 
-def apply_position_features_to_master(
-    master_df: pd.DataFrame,
-    position_df: pd.DataFrame,
-) -> pd.DataFrame:
-    """
-    Adds nearest hourly Moon altitude/illumination from Timeanddate positions.
-
-    This is more defensible than using moon meridian altitude for every hour:
-    moonlight impact depends strongly on where the Moon actually is at that
-    forecast hour.
-    """
-    if master_df is None or master_df.empty or position_df is None or position_df.empty:
-        return master_df
-
-    if "Object" not in position_df.columns or "UTC Time" not in position_df.columns:
-        return master_df
-
-    moon_df = position_df[
-        position_df["Object"].astype(str).str.lower() == "moon"
-    ].copy()
-    if moon_df.empty:
-        return master_df
-
-    moon_df["utcForecastHour"] = pd.to_datetime(
-        moon_df["UTC Time"],
-        utc=True,
-        errors="coerce",
-    ).dt.floor("h")
-    moon_df = moon_df.dropna(subset=["utcForecastHour"])
-    if moon_df.empty:
-        return master_df
-
-    rename_cols = {}
-    if "Altitude (°)" in moon_df.columns:
-        rename_cols["Altitude (°)"] = "moon_hourly_altitude"
-    if "Illuminated (%)" in moon_df.columns:
-        rename_cols["Illuminated (%)"] = "moon_hourly_illuminated_pct"
-
-    moon_keep_cols = ["utcForecastHour"] + list(rename_cols.values())
-    moon_df = moon_df.rename(columns=rename_cols)
-    moon_df = moon_df[[c for c in moon_keep_cols if c in moon_df.columns]]
-    if len(moon_df.columns) <= 1:
-        return master_df
-
-    moon_df = moon_df.groupby("utcForecastHour", as_index=False).mean(numeric_only=True)
-
-    out = master_df.copy()
-    out["utcForecastHour"] = pd.to_datetime(
-        out["utcForecastHour"],
-        utc=True,
-        errors="coerce",
-    ).dt.floor("h")
-
-    out = out.merge(moon_df, on="utcForecastHour", how="left")
-
-    if "moon_hourly_altitude" in out.columns:
-        out["moon_meridian_altitude"] = out["moon_hourly_altitude"].combine_first(
-            pd.to_numeric(out.get("moon_meridian_altitude"), errors="coerce")
-        )
-
-    if "moon_hourly_illuminated_pct" in out.columns:
-        out["moon_illuminated_pct"] = out["moon_hourly_illuminated_pct"].combine_first(
-            pd.to_numeric(out.get("moon_illuminated_pct"), errors="coerce")
-        )
-
-    return out
-
-
 # ============================================================
-# SCORING MODEL — VALIDATED SYNTHESIS VERSION
+# SCORING MODEL — NOTEBOOK UPDATED VERSION
 # ============================================================
 
 def classify_window(score: float) -> str:
@@ -1535,26 +1081,24 @@ def score_stargazing_windows(
     bortle_index: float = 5,
 ) -> pd.DataFrame:
     """
-    Deterministic synthesis model:
+    This follows the notebook's updated model:
 
-    1. Observability:
-       - smooth cloud transmission
-       - astronomical darkness gate
-       - baseline darkness/contrast
+    1. Visibility hard constraints:
+       - cloud penalty
+       - daylight penalty
 
-    2. View quality once observable:
+    2. Atmospheric quality:
        - transparency_norm
        - seeing_norm
        - humidity_quality
-       - optional aerosol/PM haze quality
 
     3. Darkness / contrast:
        - moon illumination
-       - hourly moon altitude when available, otherwise daily meridian fallback
+       - moon altitude factor
        - Bortle light pollution
 
     4. Final:
-       stargazing_score = geometric blend of observability and view quality
+       stargazing_score = 100 * visibility_penalty * base_stargazing_quality
     """
 
     if master_df is None or master_df.empty:
@@ -1570,11 +1114,6 @@ def score_stargazing_windows(
         "temperature_value",
         "moon_illuminated_pct",
         "moon_meridian_altitude",
-        "moon_hourly_altitude",
-        "moon_hourly_illuminated_pct",
-        "aerosol_optical_depth",
-        "pm2_5",
-        "dust",
     ]
 
     for col in numeric_cols:
@@ -1618,22 +1157,28 @@ def score_stargazing_windows(
     score_df["moon_meridian_altitude"] = score_df["moon_meridian_altitude"].fillna(0)
 
     # ========================================================
-    # Stage 1: Observability Gate
+    # Stage 1: Visibility Hard Constraints
     # ========================================================
 
-    cloud_fraction = (score_df["cloud_value"].clip(0, 100) / 100.0)
+    def visibility_penalty(row):
+        penalty = 1.0
 
-    # Smooth extinction curve: avoids discontinuities at 40/60/80% cloud.
-    score_df["cloud_transmission"] = np.exp(
-        -2.8 * np.power(cloud_fraction, 1.6)
-    ).clip(0.03, 1.0)
+        if row["cloud_value"] >= 80:
+            penalty = 0.05
+        elif row["cloud_value"] >= 60:
+            penalty = 0.25
+        elif row["cloud_value"] >= 40:
+            penalty = 0.55
 
-    score_df["darkness_gate"] = np.where(score_df["is_dark_enough"], 1.0, 0.08)
+        if not bool(row["is_dark_enough"]):
+            penalty *= 0.05
 
-    # Backward-compatible field name used by existing charts.
-    score_df["visibility_penalty"] = (
-        score_df["cloud_transmission"] * score_df["darkness_gate"]
-    ).clip(0, 1)
+        return penalty
+
+    score_df["visibility_penalty"] = score_df.apply(
+        visibility_penalty,
+        axis=1,
+    )
 
     # ========================================================
     # Stage 2: Astrospheric Quality — notebook updated version
@@ -1679,22 +1224,10 @@ def score_stargazing_windows(
         / (ABS_DEW_GOOD - ABS_DEW_BAD)
     )
 
-    aod = score_df["aerosol_optical_depth"]
-    pm25 = score_df["pm2_5"]
-
-    aod_quality = 1 - ((aod.clip(0.02, 0.50) - 0.02) / (0.50 - 0.02))
-    pm25_quality = 1 - ((pm25.clip(0, 35) - 0) / 35)
-    score_df["haze_quality"] = pd.concat(
-        [aod_quality, pm25_quality],
-        axis=1,
-    ).mean(axis=1, skipna=True)
-    score_df["haze_quality"] = score_df["haze_quality"].fillna(0.65).clip(0, 1)
-
     score_df["atmospheric_score"] = (
-        0.40 * score_df["transparency_norm"]
-        + 0.30 * score_df["seeing_norm"]
-        + 0.15 * score_df["humidity_quality"]
-        + 0.15 * score_df["haze_quality"]
+        0.45 * score_df["transparency_norm"]
+        + 0.35 * score_df["seeing_norm"]
+        + 0.20 * score_df["humidity_quality"]
     )
 
     # ========================================================
@@ -1723,43 +1256,21 @@ def score_stargazing_windows(
     ).clip(0, 1)
 
     # ========================================================
-    # Final Composite Score — validated synthesis version
+    # Final Composite Score — notebook updated version
     # ========================================================
 
-    score_df["observability_score"] = (
-        100
-        * score_df["darkness_gate"]
-        * score_df["cloud_transmission"]
-        * (0.70 + 0.30 * score_df["effective_darkness"])
-    ).clip(0, 100)
-
-    score_df["view_quality_score"] = (
-        100
-        * (
-            0.52 * score_df["atmospheric_score"]
-            + 0.48 * score_df["effective_darkness"]
-        )
-    ).clip(0, 100)
-
-    # Geometric blending keeps either a bad gate or bad quality from being
-    # hidden by the other component, while preserving useful spread at night.
-    score_df["stargazing_score"] = (
-        100
-        * np.power(score_df["observability_score"] / 100.0, 0.62)
-        * np.power(score_df["view_quality_score"] / 100.0, 0.38)
+    base_stargazing_quality = (
+        0.65 * score_df["atmospheric_score"]
+        + 0.35 * score_df["effective_darkness"]
     )
 
-    # Keep the notebook-era product for diagnostics and migration comparison.
-    score_df["legacy_stargazing_score"] = (
+    score_df["stargazing_score"] = (
         100
         * (
             score_df["visibility_penalty"]
-            * (
-                0.65 * score_df["atmospheric_score"]
-                + 0.35 * score_df["effective_darkness"]
-            )
+            * base_stargazing_quality
         )
-    ).clip(0, 100)
+    )
 
     score_df["stargazing_score"] = score_df["stargazing_score"].clip(0, 100)
 
@@ -2082,14 +1593,23 @@ Mention clearly if fallback data sources were used.
 
 def _dedupe_sources(retrieved_items) -> list:
     """
-    Extract unique source file names from retrieved RAG chunks.
+    Extract unique source names/titles from retrieved RAG chunks.
     """
     sources = []
 
     for item in retrieved_items or []:
-        source = item.get("source") if isinstance(item, dict) else None
-        if source and source not in sources:
-            sources.append(source)
+        if not isinstance(item, dict):
+            continue
+        source = item.get("source")
+        title = item.get("title")
+        category = item.get("category")
+        label = source
+        if title and source and str(source).startswith("project_stargazing_rag_chunks"):
+            label = f"{title} ({category or 'general'})"
+        elif title and source:
+            label = f"{source} - {title}"
+        if label and label not in sources:
+            sources.append(label)
 
     return sources
 
@@ -2101,13 +1621,97 @@ def _format_sources(sources: list) -> str:
     return "\n".join([f"- {source}" for source in sources])
 
 
-def _retrieve_stargazing_knowledge(query: str, top_k: int = 5) -> Tuple[str, str, str]:
+def _classify_rag_intent(text: str) -> str:
+    lowered = (text or "").lower()
+    intent_keywords = [
+        ("travel_planning", ["travel", "trip", "where", "destination", "drive", "nearby", "candidate", "park", "viewpoint", "campground"]),
+        ("scoring_logic", ["score", "scoring", "why", "high", "low", "rating", "threshold"]),
+        ("light_pollution", ["bortle", "light pollution", "city light", "skyglow", "dark sky"]),
+        ("moon_darkness", ["moon", "moonlight", "illumination", "phase", "darkness", "twilight"]),
+        ("atmospheric_conditions", ["cloud", "transparency", "seeing", "haze", "smoke", "humidity", "wind"]),
+        ("trip_preparation", ["bring", "gear", "safety", "prepare", "red light", "clothes", "binoculars"]),
+        ("observing_targets", ["observe", "target", "planet", "milky way", "galaxy", "nebula", "stars"]),
+    ]
+
+    for intent, keywords in intent_keywords:
+        if any(keyword in lowered for keyword in keywords):
+            return intent
+
+    return "semantic_search"
+
+
+def _merge_retrieved_items(vector_items: List[Dict], keyword_items: List[Dict], top_k: int) -> List[Dict]:
+    merged = []
+    seen = set()
+
+    for source_name, items in [
+        ("vector", vector_items or []),
+        ("keyword", keyword_items or []),
+    ]:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            text = item.get("text", "")
+            key = (
+                item.get("source"),
+                item.get("chunk_id"),
+                text[:120],
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+
+            merged_item = item.copy()
+            merged_item["retrieval_source"] = source_name
+            merged.append(merged_item)
+
+    def sort_key(item: Dict):
+        project_boost = 1 if str(item.get("source", "")).startswith("project_stargazing_rag_chunks") else 0
+        score = float(item.get("score", 0) or 0)
+        return (project_boost, score)
+
+    merged = sorted(merged, key=sort_key, reverse=True)
+    return merged[:top_k]
+
+
+def _extract_rag_notes(retrieved_context: str, max_notes: int = 3) -> List[str]:
+    if not retrieved_context or retrieved_context.startswith("No "):
+        return []
+
+    notes = []
+    for block in retrieved_context.split("\n\n---\n\n"):
+        lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if len(lines) < 2:
+            continue
+
+        body = " ".join(lines[1:])
+        body = body.replace("Category:", " Category: ").replace("Keywords:", " Keywords: ")
+        sentences = [s.strip() for s in body.split(".") if len(s.strip()) > 35]
+        if not sentences:
+            continue
+        note = sentences[0]
+        if len(note) > 220:
+            note = note[:217].rstrip() + "..."
+        notes.append(note + ".")
+        if len(notes) >= max_notes:
+            break
+
+    return notes
+
+
+def _retrieve_stargazing_knowledge(
+    query: str,
+    top_k: int = 5,
+    intent: Optional[str] = None,
+) -> Tuple[str, str, str]:
     """
     Retrieve knowledge for AI/RAG.
 
     Priority:
-    1. FAISS vector retrieval from vector_store/
-    2. Keyword fallback retrieval from data/knowledge/
+    1. FAISS vector retrieval from vector_store/ when available
+    2. Curated project keyword retrieval from data/knowledge_curated/
+    3. Raw source keyword retrieval from data/knowledge/
 
     Returns:
     - retrieved_context: formatted text block for LLM
@@ -2115,19 +1719,37 @@ def _retrieve_stargazing_knowledge(query: str, top_k: int = 5) -> Tuple[str, str
     - retrieved_sources_text: bullet list of source names
     """
 
-    try:
-        if retrieve_vector_context is None or format_vector_context is None:
-            raise RuntimeError("FAISS vector retrieval unavailable.")
-        retrieved = retrieve_vector_context(query, top_k=top_k)
-        retrieved_context = format_vector_context(retrieved)
-        rag_mode = "FAISS vector retrieval"
+    resolved_intent = intent or _classify_rag_intent(query)
+    vector_retrieved = []
+    vector_error = None
 
+    try:
+        vector_retrieved = retrieve_vector_context(query, top_k=top_k)
     except Exception as retrieval_error:
-        retrieved = retrieve_context(query, top_k=min(top_k, 4))
-        retrieved_context = format_retrieved_context(retrieved)
+        vector_error = retrieval_error
+
+    keyword_retrieved = retrieve_context(
+        query,
+        top_k=max(top_k + 3, 8),
+        intent=resolved_intent,
+    )
+
+    retrieved = _merge_retrieved_items(
+        vector_items=vector_retrieved,
+        keyword_items=keyword_retrieved,
+        top_k=top_k,
+    )
+
+    retrieved_context = format_retrieved_context(retrieved)
+
+    if vector_retrieved and keyword_retrieved:
+        rag_mode = f"Hybrid retrieval: FAISS vector search + curated keyword search. Intent: {resolved_intent}"
+    elif vector_retrieved:
+        rag_mode = f"FAISS vector retrieval. Intent: {resolved_intent}"
+    else:
         rag_mode = (
-            "Keyword fallback retrieval. "
-            f"Vector retrieval failed because: {retrieval_error}"
+            f"Curated keyword fallback retrieval. Intent: {resolved_intent}. "
+            f"Vector retrieval unavailable because: {vector_error}"
         )
 
     sources = _dedupe_sources(retrieved)
@@ -2211,7 +1833,8 @@ what to observe under poor, hazy, moonlit, cloudy, or dark conditions.
 
         retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
             retrieval_query,
-            top_k=5,
+            top_k=8,
+            intent="forecast_explanation",
         )
 
         prompt = f"""
@@ -2747,6 +2370,7 @@ def _safe_float(value):
 def generate_stargazing_travel_plan(
     context: Dict,
     search_result: Dict,
+    use_ai_text: bool = True,
 ) -> str:
     if search_result.get("status") != "eligible":
         return (
@@ -2758,27 +2382,38 @@ def generate_stargazing_travel_plan(
     destination = search_result.get("destination") or best_candidate.get("destination")
     compact_context = _compact_context_for_ai(context)
 
-    if not OPENAI_API_KEY:
-        return _build_deterministic_travel_plan(compact_context, search_result)
-
-    try:
-        from openai import OpenAI
-
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        retrieval_query = f"""
+    retrieval_query = f"""
 Stargazing travel planning advice.
 Current score: {search_result.get("current_score")}
 Best nearby score: {best_candidate.get("best_score")}
 Nearby location: {best_candidate.get("lat")}, {best_candidate.get("lon")}
 Resolved destination: {json.dumps(destination, default=str)}
+Candidate time window: {best_candidate.get("time_label")}
+Estimated Bortle: {best_candidate.get("estimated_bortle_index")}
+Forecast factors: cloud {best_candidate.get("cloud_value")}, transparency {best_candidate.get("transparency_value")}, seeing {best_candidate.get("seeing_value")}
 Concepts: dark sky travel, Bortle scale, local stargazing trip, moonlight,
-cloud cover, transparency, seeing, safety planning, choosing observing sites.
+cloud cover, transparency, seeing, safety planning, choosing observing sites,
+destination suitability, open horizon, dark adaptation, what to bring.
 """
-        retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
-            retrieval_query,
-            top_k=5,
+    retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
+        retrieval_query,
+        top_k=8,
+        intent="travel_planning",
+    )
+    rag_notes = _extract_rag_notes(retrieved_context, max_notes=3)
+
+    if not use_ai_text or not OPENAI_API_KEY:
+        return _build_deterministic_travel_plan(
+            compact_context,
+            search_result,
+            rag_notes=rag_notes,
+            retrieved_sources_text=retrieved_sources_text,
         )
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
 
         prompt = f"""
 You are a stargazing travel-planning assistant.
@@ -2796,6 +2431,7 @@ Rules:
 - Explain that nearby light pollution/Bortle is estimated, not measured from a map.
 - Keep driving and safety advice general; do not invent roads, closures, fees, or exact travel times.
 - Focus on where to go, why it is better, when to go, what to bring, and how to decide if the trip is worth it.
+- Use retrieved RAG knowledge to support safety, gear, destination-suitability, and score-interpretation advice.
 - Use markdown with clear headings and concise bullets.
 
 Current forecast context:
@@ -2842,11 +2478,21 @@ Mention estimated Bortle/light pollution, fallback astronomy data, and that AI e
         return response.output_text
 
     except Exception as e:
-        fallback = _build_deterministic_travel_plan(compact_context, search_result)
+        fallback = _build_deterministic_travel_plan(
+            compact_context,
+            search_result,
+            rag_notes=rag_notes,
+            retrieved_sources_text=retrieved_sources_text,
+        )
         return f"{fallback}\n\n_AI travel-plan generation failed: {e}_"
 
 
-def _build_deterministic_travel_plan(context: Dict, search_result: Dict) -> str:
+def _build_deterministic_travel_plan(
+    context: Dict,
+    search_result: Dict,
+    rag_notes: Optional[List[str]] = None,
+    retrieved_sources_text: Optional[str] = None,
+) -> str:
     best = search_result.get("best_candidate") or {}
     destination = search_result.get("destination") or best.get("destination") or {}
     current_score = search_result.get("current_score")
@@ -2871,6 +2517,21 @@ def _build_deterministic_travel_plan(context: Dict, search_result: Dict) -> str:
             f"- The selected public outdoor destination is about "
             f"`{destination_distance:.1f} km` from the highest-scoring forecast point.\n"
         )
+
+    rag_section = ""
+    if rag_notes:
+        formatted_notes = "\n".join([f"- {note}" for note in rag_notes])
+        rag_section = f"""
+## Knowledge-Backed Planning Notes
+{formatted_notes}
+"""
+
+    sources_section = ""
+    if retrieved_sources_text:
+        sources_section = f"""
+## Retrieved Sources
+{retrieved_sources_text}
+"""
 
     return f"""
 ## Travel Recommendation
@@ -2902,6 +2563,8 @@ def _build_deterministic_travel_plan(context: Dict, search_result: Dict) -> str:
 - Nearby Bortle/light-pollution is estimated, not measured from a live map.
 - Nearby astronomy values use the app's fallback approximation because moon/twilight timing changes very little across this radius.
 - This plan explains deterministic score output; it does not change the score.
+{rag_section}
+{sources_section}
 """
 
 
@@ -2925,16 +2588,11 @@ def generate_travel_plan_for_current_forecast(
 
     travel_plan = None
     if search_result.get("status") == "eligible":
-        if use_ai_text:
-            travel_plan = generate_stargazing_travel_plan(
-                context=context,
-                search_result=search_result,
-            )
-        else:
-            travel_plan = _build_deterministic_travel_plan(
-                _compact_context_for_ai(context),
-                search_result,
-            )
+        travel_plan = generate_stargazing_travel_plan(
+            context=context,
+            search_result=search_result,
+            use_ai_text=use_ai_text,
+        )
 
     return {
         "search": search_result,
@@ -2957,24 +2615,16 @@ def answer_semantic_knowledge_question(
     so the answer can connect general knowledge to the current location and score.
     """
 
-    if not OPENAI_API_KEY:
-        return "Semantic knowledge answer unavailable because OPENAI_API_KEY is not set."
-
     if not user_question or not user_question.strip():
         return "Please enter a stargazing question."
 
-    try:
-        from openai import OpenAI
+    user_question_clean = user_question.strip()
+    compact_context = _compact_context_for_ai(context or {})
+    question_intent = _classify_rag_intent(user_question_clean)
 
-        client = OpenAI(api_key=OPENAI_API_KEY)
-
-        user_question_clean = user_question.strip()
-        compact_context = _compact_context_for_ai(context or {})
-
-        retrieval_query = user_question_clean
-
-        if use_forecast_context and compact_context:
-            retrieval_query = f"""
+    retrieval_query = user_question_clean
+    if use_forecast_context and compact_context:
+        retrieval_query = f"""
 User question:
 {user_question_clean}
 
@@ -2986,9 +2636,36 @@ stargazing, city lights, light pollution, Bortle scale, moon illumination,
 moon phase, cloud cover, transparency, seeing, dark sky, observing tips.
 """
 
+    if not OPENAI_API_KEY:
         retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
             retrieval_query,
             top_k=5,
+            intent=question_intent,
+        )
+        notes = _extract_rag_notes(retrieved_context, max_notes=4)
+        formatted_notes = "\n".join([f"- {note}" for note in notes]) or "- No matching local knowledge chunks were retrieved."
+        return f"""
+OpenAI text generation is unavailable because `OPENAI_API_KEY` is not set, but local RAG retrieval still ran.
+
+## Retrieved Knowledge Notes
+{formatted_notes}
+
+## Retrieval Mode
+{rag_mode}
+
+## Retrieved Sources
+{retrieved_sources_text}
+"""
+
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(api_key=OPENAI_API_KEY)
+
+        retrieved_context, rag_mode, retrieved_sources_text = _retrieve_stargazing_knowledge(
+            retrieval_query,
+            top_k=8,
+            intent=question_intent,
         )
 
         forecast_block = ""
@@ -3016,6 +2693,9 @@ Rules:
 - Keep the answer practical and user-friendly.
 - Use markdown.
 - Include retrieved source names at the end.
+
+Detected question intent:
+{question_intent}
 
 User question:
 {user_question_clean}
@@ -3126,28 +2806,20 @@ def _build_telemetry_report(
             "cluster_counts": cluster_counts,
         },
         "scoring_model": {
-            "observability": {
-                "cloud_transmission": "exp(-2.8 * (cloud_cover_fraction ** 1.6))",
-                "darkness_gate": {
-                    "dark_enough": 1.0,
-                    "daylight_or_twilight": 0.08,
-                },
-                "formula": "100 * darkness_gate * cloud_transmission * (0.70 + 0.30 * effective_darkness)",
+            "visibility_penalty": {
+                "cloud_ge_80": 0.05,
+                "cloud_ge_60": 0.25,
+                "cloud_ge_40": 0.55,
+                "daylight_multiplier_if_not_dark": 0.05,
             },
             "atmospheric_weights": {
-                "transparency_norm": 0.40,
-                "seeing_norm": 0.30,
-                "humidity_quality": 0.15,
-                "haze_quality": 0.15,
+                "transparency_norm": 0.45,
+                "seeing_norm": 0.35,
+                "humidity_quality": 0.20,
             },
-            "view_quality": {
-                "atmospheric_score": 0.52,
-                "effective_darkness": 0.48,
-                "formula": "100 * (0.52 * atmospheric_score + 0.48 * effective_darkness)",
-            },
-            "final_synthesis": {
-                "formula": "100 * (observability_score / 100)^0.62 * (view_quality_score / 100)^0.38",
-                "legacy_score_column": "legacy_stargazing_score",
+            "final_weights": {
+                "atmospheric_score": 0.65,
+                "effective_darkness": 0.35,
             },
             "recommendation_thresholds": {
                 "excellent": ">= 85",
@@ -3277,17 +2949,6 @@ def run_pipeline(
         event_df=event_df,
         timezone=timezone,
     )
-
-    if include_positions and position_df is not None and not position_df.empty:
-        master_df = apply_position_features_to_master(
-            master_df=master_df,
-            position_df=position_df,
-        )
-        _telemetry_log(
-            telemetry_logs,
-            "Applied hourly Sun/Moon position features to scoring dataframe.",
-        )
-
     _telemetry_log(telemetry_logs, f"Master dataframe ready. rows={len(master_df)}.")
 
     _telemetry_log(telemetry_logs, "Running deterministic scoring model.")

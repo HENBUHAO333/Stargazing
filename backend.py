@@ -2876,3 +2876,4 @@ if __name__ == "__main__":
     print("Score df:", result["score_df"].shape)
     print("Top windows:", result["top_windows"].shape)
     print(result["top_windows"].head())
+

@@ -32,7 +32,7 @@ try:
     )
     HAS_RAG_BACKEND = True
 
-except ImportError:
+except ImportError as backend_import_error:
     from backend import (
         run_pipeline,
         CITY_PRESETS,
@@ -44,7 +44,10 @@ except ImportError:
     answer_semantic_knowledge_question = None
     generate_travel_plan_for_current_forecast = None
     TRAVEL_PLAN_SCORE_THRESHOLD = 70.0
+    BACKEND_IMPORT_ERROR = str(backend_import_error)
     HAS_RAG_BACKEND = False
+else:
+    BACKEND_IMPORT_ERROR = None
 
 
 # ============================================================
@@ -1294,7 +1297,8 @@ def cached_generate_forecast_insight(context):
     if generate_forecast_ai_insight is None:
         return (
             "Forecast AI Insight backend function not found. Please add "
-            "`generate_forecast_ai_insight()` to backend.py first."
+            "`generate_forecast_ai_insight()` to backend.py first.\n\n"
+            f"Backend import error: {BACKEND_IMPORT_ERROR or 'unknown'}"
         )
     return generate_forecast_ai_insight(context)
 
@@ -1315,7 +1319,8 @@ def cached_generate_travel_plan(
                 "status": "unavailable",
                 "reason": (
                     "Travel-planning backend function not found. Please add "
-                    "`generate_travel_plan_for_current_forecast()` to backend.py first."
+                    "`generate_travel_plan_for_current_forecast()` to backend.py first. "
+                    f"Backend import error: {BACKEND_IMPORT_ERROR or 'unknown'}"
                 ),
                 "candidates": [],
                 "best_candidate": None,
@@ -1339,7 +1344,8 @@ def cached_answer_semantic_question(user_question, context, use_forecast_context
     if answer_semantic_knowledge_question is None:
         return (
             "Semantic Search backend function not found. Please add "
-            "`answer_semantic_knowledge_question()` to backend.py first."
+            "`answer_semantic_knowledge_question()` to backend.py first.\n\n"
+            f"Backend import error: {BACKEND_IMPORT_ERROR or 'unknown'}"
         )
     return answer_semantic_knowledge_question(
         user_question=user_question,

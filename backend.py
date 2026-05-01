@@ -12,37 +12,18 @@ import requests
 
 try:
     from dotenv import load_dotenv
-<<<<<<< Updated upstream
-except ImportError:
-    def load_dotenv():
-=======
 except Exception:
     def load_dotenv(*args, **kwargs):
->>>>>>> Stashed changes
         return False
 
 from rag_utils import retrieve_context, format_retrieved_context
 
 try:
     from rag_vector_utils import retrieve_vector_context, format_vector_context
-<<<<<<< Updated upstream
 except Exception as rag_vector_import_error:
     RAG_VECTOR_IMPORT_ERROR = str(rag_vector_import_error)
-
-    def retrieve_vector_context(*args, **kwargs):
-        raise RuntimeError(
-            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
-        )
-
-    def format_vector_context(*args, **kwargs):
-        raise RuntimeError(
-            f"Vector retrieval is unavailable: {RAG_VECTOR_IMPORT_ERROR}"
-        )
-=======
-except Exception:
     retrieve_vector_context = None
     format_vector_context = None
->>>>>>> Stashed changes
 
 load_dotenv()
 
@@ -3405,4 +3386,3 @@ if __name__ == "__main__":
     print("Score df:", result["score_df"].shape)
     print("Top windows:", result["top_windows"].shape)
     print(result["top_windows"].head())
-

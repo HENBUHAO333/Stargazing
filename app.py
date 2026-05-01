@@ -4,11 +4,8 @@ import random
 import os
 from html import escape
 import streamlit as st
-<<<<<<< Updated upstream
 import streamlit.components.v1 as components
-=======
 import numpy as np
->>>>>>> Stashed changes
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
@@ -3903,4 +3900,3 @@ if selected_page == "Methodology":
 if selected_page == "Telemetry":
     with st.expander("Telemetry", expanded=True):
         render_telemetry_console(telemetry)
-

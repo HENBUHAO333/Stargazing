@@ -115,6 +115,15 @@ CITY_PRESETS = {
     "Boston": (42.3601, -71.0589, "America/New_York"),
     "Toronto": (43.6532, -79.3832, "America/Toronto"),
     "Vancouver": (49.2827, -123.1207, "America/Vancouver"),
+    "Dark Sky: Big Bend National Park": (29.1275, -103.2425, "America/Chicago"),
+    "Dark Sky: Bryce Canyon National Park": (37.5930, -112.1871, "America/Denver"),
+    "Dark Sky: Arches National Park": (38.7331, -109.5925, "America/Denver"),
+    "Dark Sky: Death Valley National Park": (36.5054, -117.0794, "America/Los_Angeles"),
+    "Dark Sky: Great Basin National Park": (38.9833, -114.3000, "America/Los_Angeles"),
+    "Dark Sky: Natural Bridges National Monument": (37.6044, -110.0028, "America/Denver"),
+    "Dark Sky: Grand Canyon National Park": (36.2679, -112.3535, "America/Phoenix"),
+    "Dark Sky: Joshua Tree National Park": (33.8734, -115.9010, "America/Los_Angeles"),
+    "Dark Sky: Voyageurs National Park": (48.4833, -92.8389, "America/Chicago"),
 }
 
 
@@ -249,10 +258,12 @@ def fetch_open_meteo_forecast(
 
     Important:
     Open-Meteo does not provide astronomy-specific seeing/transparency.
-    We convert it into the same schema used by the notebook:
+    We convert it into the same schema used by the notebook, but keep it
+    conservative so the fallback does not look artificially better than
+    Astrospheric:
     - cloud_value: 0-100 cloud cover
-    - transparency_value: synthetic 1-5 scale, lower = better
-    - seeing_value: neutral fallback value
+    - transparency_value: synthetic 1-5 scale from surface visibility
+    - seeing_value: weak conservative placeholder
     """
 
     url = "https://api.open-meteo.com/v1/forecast"
@@ -291,12 +302,17 @@ def fetch_open_meteo_forecast(
     visibility_km = visibility / 1000
 
     # Convert visibility to notebook-style 1-good / 5-bad scale.
-    df["transparency_value"] = 5 - (visibility_km.clip(0, 20) / 20 * 4)
-    df["transparency_value"] = df["transparency_value"].clip(1, 5)
+    # Meteorological visibility is not the same as astronomical transparency:
+    # 20 km visibility can still be mediocre for faint-sky observing. Use a
+    # wider 40 km range and cap the proxy at 1.5 so fallback never implies
+    # perfect Astrospheric-style transparency.
+    df["transparency_value"] = 5 - (visibility_km.clip(0, 40) / 40 * 3.5)
+    df["transparency_value"] = df["transparency_value"].clip(1.5, 5)
 
     # Open-Meteo has no astronomical seeing.
-    # 3 is a neutral midpoint in the notebook's 1-5 logic.
-    df["seeing_value"] = 3.0
+    # 3.5 is a conservative midpoint in the app's 1-good / 5-bad logic.
+    df["seeing_value"] = 3.5
+    df["fallback_weather_proxy"] = True
 
     df["temperature_value"] = pd.to_numeric(df.get("temperature_2m"), errors="coerce")
     df["dewPoint_value"] = pd.to_numeric(df.get("dew_point_2m"), errors="coerce")
@@ -324,6 +340,7 @@ def fetch_open_meteo_forecast(
         "dewPoint_color",
         "wind_value",
         "wind_color",
+        "fallback_weather_proxy",
     ]
 
     return df[keep_cols]
@@ -511,6 +528,7 @@ def build_weather_from_meteoblue(meteoblue_df: pd.DataFrame) -> pd.DataFrame:
     df["temperature_value"] = df["meteoblue_temperature_value"]
     df["dewPoint_value"] = df["meteoblue_dewpoint_value"]
     df["wind_value"] = df["meteoblue_wind_value"]
+    df["fallback_weather_proxy"] = True
 
     for col in [
         "seeing_color",
@@ -537,6 +555,7 @@ def build_weather_from_meteoblue(meteoblue_df: pd.DataFrame) -> pd.DataFrame:
         "dewPoint_color",
         "wind_value",
         "wind_color",
+        "fallback_weather_proxy",
     ] + [c for c in df.columns if c.startswith("meteoblue_")]
 
     return df[keep_cols]
@@ -819,10 +838,9 @@ def fetch_tonight_sky_times(lat: float, lon: float) -> Optional[dict]:
     """
     Return twilight hours for tonight's timeline widget.
 
-    Evening fields come from today's date (or yesterday if it's pre-noon).
+    Evening fields come from today's date (or yesterday if it is pre-noon).
     Dawn comes from the following morning so the full dusk-to-dawn arc is covered.
-    All hours > 24 indicate next-day times (e.g. 28.15 = 04:09 AM tomorrow).
-    Returns None on any fetch or parse failure so callers can fall back gracefully.
+    All hours > 24 indicate next-day times, for example 28.15 = 04:09 tomorrow.
     """
     if IPGEOLOC_API_KEY is None:
         return None
@@ -830,29 +848,29 @@ def fetch_tonight_sky_times(lat: float, lon: float) -> Optional[dict]:
     now = datetime.now()
     if now.hour < 12:
         evening_date = (now - timedelta(days=1)).date()
-        dawn_date    = now.date()
+        dawn_date = now.date()
     else:
         evening_date = now.date()
-        dawn_date    = (now + timedelta(days=1)).date()
+        dawn_date = (now + timedelta(days=1)).date()
 
-    def _parse(s: Optional[str]) -> Optional[float]:
-        if not s or s == "-":
+    def _parse(value: Optional[str]) -> Optional[float]:
+        if not value or value == "-":
             return None
         try:
-            h, m = s.split(":")
-            return int(h) + int(m) / 60.0
+            hour, minute = value.split(":")
+            return int(hour) + int(minute) / 60.0
         except Exception:
             return None
 
     url = "https://api.ipgeolocation.io/v3/astronomy/timeSeries"
 
-    def _fetch_day(d) -> Optional[dict]:
+    def _fetch_day(day) -> Optional[dict]:
         try:
             params = {
                 "apiKey": IPGEOLOC_API_KEY,
                 "location": f"{lat},{lon}",
-                "dateStart": d.strftime("%Y-%m-%d"),
-                "dateEnd":   d.strftime("%Y-%m-%d"),
+                "dateStart": day.strftime("%Y-%m-%d"),
+                "dateEnd": day.strftime("%Y-%m-%d"),
             }
             resp = requests.get(url, params=params, timeout=10)
             resp.raise_for_status()
@@ -861,26 +879,29 @@ def fetch_tonight_sky_times(lat: float, lon: float) -> Optional[dict]:
         except Exception:
             return None
 
-    eve  = _fetch_day(evening_date)
-    morn = _fetch_day(dawn_date)
-    if eve is None or morn is None:
+    evening = _fetch_day(evening_date)
+    morning = _fetch_day(dawn_date)
+    if evening is None or morning is None:
         return None
 
-    sunset_h       = _parse(eve.get("sunset"))
-    civil_end_h    = _parse(eve.get("evening", {}).get("civil_twilight_end"))
-    nautical_end_h = _parse(eve.get("evening", {}).get("nautical_twilight_end"))
-    astro_dark_h   = _parse(eve.get("evening", {}).get("astronomical_twilight_end"))
-    dawn_raw_h     = _parse(morn.get("morning", {}).get("astronomical_twilight_begin"))
+    sunset_h = _parse(evening.get("sunset"))
+    civil_end_h = _parse(evening.get("evening", {}).get("civil_twilight_end"))
+    nautical_end_h = _parse(evening.get("evening", {}).get("nautical_twilight_end"))
+    astro_dark_h = _parse(evening.get("evening", {}).get("astronomical_twilight_end"))
+    dawn_raw_h = _parse(morning.get("morning", {}).get("astronomical_twilight_begin"))
 
-    if any(v is None for v in [sunset_h, civil_end_h, nautical_end_h, astro_dark_h, dawn_raw_h]):
+    if any(
+        value is None
+        for value in [sunset_h, civil_end_h, nautical_end_h, astro_dark_h, dawn_raw_h]
+    ):
         return None
 
     return {
-        "sunset_h":       sunset_h,
-        "civil_end_h":    civil_end_h,
+        "sunset_h": sunset_h,
+        "civil_end_h": civil_end_h,
         "nautical_end_h": nautical_end_h,
-        "astro_dark_h":   astro_dark_h,
-        "dawn_h":         dawn_raw_h + 24,
+        "astro_dark_h": astro_dark_h,
+        "dawn_h": dawn_raw_h + 24,
     }
 
 
@@ -1657,6 +1678,7 @@ def score_stargazing_windows(
         "aerosol_optical_depth",
         "pm2_5",
         "dust",
+        "fallback_weather_proxy",
     ]
 
     for col in numeric_cols:
@@ -1778,6 +1800,16 @@ def score_stargazing_windows(
         + 0.15 * score_df["humidity_quality"]
         + 0.15 * score_df["haze_quality"]
     )
+
+    fallback_proxy = (
+        score_df.get("fallback_weather_proxy", False)
+        .astype("boolean")
+        .fillna(False)
+    )
+    score_df["weather_proxy_quality"] = np.where(fallback_proxy, 0.88, 1.0)
+    score_df["atmospheric_score"] = (
+        score_df["atmospheric_score"] * score_df["weather_proxy_quality"]
+    ).clip(0, 1)
 
     # ========================================================
     # Stage 3: Darkness / Contrast Model

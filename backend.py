@@ -784,7 +784,8 @@ def fetch_ipgeo_astronomy(
     def request_timeseries(start_dt: datetime, end_dt: datetime) -> list:
         params = {
             "apiKey": IPGEOLOC_API_KEY,
-            "location": f"{lat},{lon}",
+            "lat": lat,
+            "long": lon,
             "dateStart": start_dt.strftime("%Y-%m-%d"),
             "dateEnd": end_dt.strftime("%Y-%m-%d"),
         }
@@ -868,7 +869,8 @@ def fetch_tonight_sky_times(lat: float, lon: float) -> Optional[dict]:
         try:
             params = {
                 "apiKey": IPGEOLOC_API_KEY,
-                "location": f"{lat},{lon}",
+                "lat": lat,
+                "long": lon,
                 "dateStart": day.strftime("%Y-%m-%d"),
                 "dateEnd": day.strftime("%Y-%m-%d"),
             }

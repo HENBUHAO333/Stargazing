@@ -41,7 +41,7 @@ try:
         None,
     )
     TRAVEL_PLAN_SCORE_THRESHOLD = getattr(backend_module, "TRAVEL_PLAN_SCORE_THRESHOLD", 70.0)
-    fetch_tonight_sky_times = backend_module.fetch_tonight_sky_times
+    fetch_tonight_sky_times = getattr(backend_module, "fetch_tonight_sky_times", lambda lat, lon: None)
 
     BACKEND_IMPORT_ERROR = None
     HAS_RAG_BACKEND = generate_rag_recommendation is not None
@@ -1471,6 +1471,8 @@ HUMAN_LABELS = {
     "seeing_norm": "Seeing Quality",
     "humidity_quality": "Humidity Quality",
     "haze_quality": "Haze Quality",
+    "weather_proxy_quality": "Weather Proxy Quality",
+    "fallback_weather_proxy": "Fallback Weather Proxy",
     "moon_brightness_penalty": "Moon Brightness Penalty",
     "effective_darkness": "Effective Darkness",
     "atmospheric_score": "Atmospheric Score",
@@ -1975,6 +1977,7 @@ def build_score_validation_frame(score_df: pd.DataFrame) -> pd.DataFrame:
         "seeing_norm",
         "humidity_quality",
         "haze_quality",
+        "weather_proxy_quality",
         "cloud_transmission",
         "darkness_gate",
         "observability_score",
@@ -2600,6 +2603,7 @@ def render_score_validation_panel(score_df: pd.DataFrame, bortle_index: int, res
                 "seeing_norm",
                 "humidity_quality",
                 "haze_quality",
+                "weather_proxy_quality",
                 "moon_brightness_penalty",
             ] if c in validation_df.columns
         ]
@@ -3113,43 +3117,42 @@ def _cached_sky_times(lat: float, lon: float) -> dict:
 
 def _night_timeline_card_html(lat: float, lon: float) -> str:
     """Dusk-to-dawn phase bar with JS-driven live NOW cursor."""
-    _FALLBACK = {
-        "sunset_h":       19 + 42/60,
-        "civil_end_h":    20 +  9/60,
-        "nautical_end_h": 20 + 38/60,
-        "astro_dark_h":   21 + 11/60,
-        "dawn_h":         24 +  5 +  2/60,
+    fallback = {
+        "sunset_h": 19 + 42 / 60,
+        "civil_end_h": 20 + 9 / 60,
+        "nautical_end_h": 20 + 38 / 60,
+        "astro_dark_h": 21 + 11 / 60,
+        "dawn_h": 24 + 5 + 2 / 60,
     }
     sky = _cached_sky_times(lat, lon) if lat is not None and lon is not None else {}
-    times = {k: sky.get(k, _FALLBACK[k]) for k in _FALLBACK}
+    times = {key: sky.get(key, fallback[key]) for key in fallback}
 
     t_start = times["sunset_h"]
-    t_end   = times["dawn_h"]
+    t_end = times["dawn_h"]
 
-    def _fmt(h: float) -> str:
-        h_mod = h % 24
-        suffix = "am" if h_mod < 12 else "pm"
-        h12 = h_mod % 12 or 12
-        m = round((h12 % 1) * 60)
-        h12 = int(h12)
-        return f"{h12}:{m:02d} {suffix}"
+    def _fmt(hour_float: float) -> str:
+        hour_mod = hour_float % 24
+        suffix = "am" if hour_mod < 12 else "pm"
+        hour12 = hour_mod % 12 or 12
+        minute = round((hour12 % 1) * 60)
+        hour12 = int(hour12)
+        return f"{hour12}:{minute:02d} {suffix}"
 
-    # Initial server-side position so cursor renders correctly on first paint.
-    now    = datetime.now()
+    now = datetime.now()
     hour_f = now.hour + now.minute / 60.0
-    adj_h  = hour_f if hour_f >= t_start else hour_f + 24
+    adj_h = hour_f if hour_f >= t_start else hour_f + 24
     now_pct = max(0.02, min(0.97, (adj_h - t_start) / (t_end - t_start)))
 
-    _phase_hours = [
-        ("☀",  "Sunset",     _fmt(times["sunset_h"]),       times["sunset_h"]),
-        (None, "Civil",      _fmt(times["civil_end_h"]),     times["civil_end_h"]),
-        (None, "Nautical",   _fmt(times["nautical_end_h"]),  times["nautical_end_h"]),
-        ("★",  "Astro Dark", _fmt(times["astro_dark_h"]),    times["astro_dark_h"]),
-        (None, "Dawn",       _fmt(times["dawn_h"]),          times["dawn_h"]),
+    phase_hours = [
+        ("☀", "Sunset", _fmt(times["sunset_h"]), times["sunset_h"]),
+        (None, "Civil", _fmt(times["civil_end_h"]), times["civil_end_h"]),
+        (None, "Nautical", _fmt(times["nautical_end_h"]), times["nautical_end_h"]),
+        ("★", "Astro Dark", _fmt(times["astro_dark_h"]), times["astro_dark_h"]),
+        (None, "Dawn", _fmt(times["dawn_h"]), times["dawn_h"]),
     ]
     phases = [
-        (icon, label, time_s, (h - t_start) / (t_end - t_start))
-        for icon, label, time_s, h in _phase_hours
+        (icon, label, time_s, (phase_hour - t_start) / (t_end - t_start))
+        for icon, label, time_s, phase_hour in phase_hours
     ]
 
     ticks_html = "".join(
@@ -3158,34 +3161,30 @@ def _night_timeline_card_html(lat: float, lon: float) -> str:
         for p in phases
     )
 
-    # Key phases always get full labels; secondary phases only if ≥12% away from every key phase.
-    KEY_PHASES  = {"Sunset", "Astro Dark", "Dawn"}
-    MIN_GAP     = 0.12
-    key_pcts    = {lbl: pct for _, lbl, _, pct in phases if lbl in KEY_PHASES}
+    key_phases = {"Sunset", "Astro Dark", "Dawn"}
+    min_gap = 0.12
+    key_pcts = {label: pct for _, label, _, pct in phases if label in key_phases}
 
     labels_html = ""
-    n = len(phases)
     for i, (icon, label, time_s, pct) in enumerate(phases):
         if i == 0:
             transform = "translateX(0%)"
-            align     = "flex-start"
-        elif i == n - 1:
+            align = "flex-start"
+        elif i == len(phases) - 1:
             transform = "translateX(-100%)"
-            align     = "flex-end"
+            align = "flex-end"
         else:
             transform = "translateX(-50%)"
-            align     = "center"
+            align = "center"
 
-        is_key     = label in KEY_PHASES
-        has_space  = all(abs(pct - kp) >= MIN_GAP for kp in key_pcts.values())
-        show_label = is_key or has_space
-
-        if not show_label:
+        is_key = label in key_phases
+        has_space = all(abs(pct - key_pct) >= min_gap for key_pct in key_pcts.values())
+        if not (is_key or has_space):
             continue
 
-        lbl_color  = "#e4dff0" if icon else "#8880a0"
-        lbl_weight = "600"     if icon else "400"
-        icon_html  = (
+        lbl_color = "#e4dff0" if icon else "#8880a0"
+        lbl_weight = "600" if icon else "400"
+        icon_html = (
             f'<span style="font-size:10px;color:#c478d2;margin-bottom:1px;">{icon}</span>'
             if icon else ""
         )
@@ -3486,7 +3485,6 @@ if "pipeline_result" not in st.session_state:
                 st.error("The pipeline failed.")
                 st.exception(e)
     
-    # Resolve lat/lon for city-preset mode (where lat/lon are None)
     _tl_lat, _tl_lon = lat, lon
     if _tl_lat is None or _tl_lon is None:
         _coords = CITY_PRESETS.get(city_name)
@@ -3724,7 +3722,7 @@ with st.expander("Sky Conditions", expanded=_section_open("Sky Conditions")):
     feature_options = [c for c in [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
         "visibility_penalty","cloud_transmission","darkness_gate",
-        "transparency_norm","seeing_norm","humidity_quality","haze_quality",
+        "transparency_norm","seeing_norm","humidity_quality","haze_quality","weather_proxy_quality",
         "moon_brightness_penalty","effective_darkness","atmospheric_score",
         "observability_score","view_quality_score","legacy_stargazing_score","stargazing_score",
         "aerosol_optical_depth","pm2_5","dust",

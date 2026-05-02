@@ -3188,7 +3188,7 @@ def _cached_sky_times(lat: float, lon: float) -> dict:
 
 
 def _night_timeline_card_html(lat: float, lon: float) -> str:
-    """Dusk-to-dawn phase bar. NOW cursor hidden during daytime."""
+    """Dusk-to-dawn phase bar. NOW cursor shown only after tonight's sunset."""
     fallback = {
         "sunset_h":       19 + 42/60,
         "civil_end_h":    20 +  9/60,
@@ -3213,32 +3213,54 @@ def _night_timeline_card_html(lat: float, lon: float) -> str:
     def _pct(h):
         return (h - t_start) / span
 
-    # ── phases ──────────────────────────────────────────────
+    # ── phases ───────────────────────────────────────────────────
     phase_defs = [
-        ("☀",  "Sunset",     times["sunset_h"]),
-        (None, "Civil",      times["civil_end_h"]),
-        (None, "Nautical",   times["nautical_end_h"]),
-        ("★",  "Astro Dark", times["astro_dark_h"]),
-        (None, "Dawn",       times["dawn_h"]),
+        ("\u2600",  "Sunset",     times["sunset_h"]),
+        (None,      "Civil",      times["civil_end_h"]),
+        (None,      "Nautical",   times["nautical_end_h"]),
+        ("\u2605",  "Astro Dark", times["astro_dark_h"]),
+        (None,      "Dawn",       times["dawn_h"]),
     ]
     phases = [(icon, lbl, _fmt(h), _pct(h)) for icon, lbl, h in phase_defs]
 
-    # ── NOW cursor: hide outside the dusk-to-dawn window ────
+    # ── is current time inside tonight's window? ────────────────
     now    = datetime.now()
     hour_f = now.hour + now.minute / 60.0
+    # adjust so times after midnight are > 24 for comparison
     adj_h  = hour_f if hour_f >= t_start else hour_f + 24
     in_win = t_start <= adj_h <= t_end
     now_pct = _pct(adj_h) if in_win else 0.5
+    vis     = "visible" if in_win else "hidden"
 
-    # ── tick marks ───────────────────────────────────────────
+    # ── layout constants (px) ────────────────────────────────────
+    BAR_TOP  = 32   # distance from container top to bar top
+    BAR_H    = 10   # bar height
+    LBL_TOP  = BAR_TOP + BAR_H + 10   # 10 px gap below bar
+
+    # ── bar gradient anchored to actual phase proportions ────────
+    cp = _pct(times["civil_end_h"])    * 100
+    np = _pct(times["nautical_end_h"]) * 100
+    ap = _pct(times["astro_dark_h"])   * 100
+    gradient = (
+        f"rgba(224,130,64,.20) 0%,"
+        f"rgba(80,96,192,.38) {cp:.1f}%,"
+        f"rgba(10,10,40,.88) {np:.1f}%,"
+        f"rgba(5,5,20,.97) {ap:.1f}%,"
+        f"rgba(5,5,20,.97) {100-ap:.1f}%,"
+        f"rgba(10,10,40,.88) {100-np:.1f}%,"
+        f"rgba(80,96,192,.38) {100-cp:.1f}%,"
+        f"rgba(224,130,64,.20) 100%"
+    )
+
+    # ── ticks: same top/height as the bar ───────────────────────
     ticks_html = "".join(
-        f'<div style="position:absolute;top:0;left:{p*100:.2f}%;'
-        f'width:1px;height:100%;background:rgba(196,120,210,0.28);"></div>'
+        f'<div style="position:absolute;top:{BAR_TOP}px;left:{p*100:.2f}%;' 
+        f'width:1px;height:{BAR_H}px;background:rgba(196,120,210,0.30);"></div>'
         for _, _, _, p in phases
     )
 
-    # ── labels: key phases always shown; secondary only if
-    #    they have ≥12% clearance from every key-phase tick ──
+    # ── labels: Sunset/Astro Dark/Dawn always shown; ─────────────
+    #    Civil & Nautical only if ≥12% gap from any key phase tick
     KEY    = {"Sunset", "Astro Dark", "Dawn"}
     MINGAP = 0.12
     key_pcts = [p for _, lbl, _, p in phases if lbl in KEY]
@@ -3256,77 +3278,65 @@ def _night_timeline_card_html(lat: float, lon: float) -> str:
             tx, align = "translateX(-50%)",  "center"
         color  = "#e4dff0" if icon else "#8880a0"
         weight = "600"     if icon else "400"
-        icon_s = (f'<span style="font-size:10px;color:#c478d2;">{icon}</span>'
-                  if icon else "")
+        icon_s = (f'<span style="font-size:10px;color:#c478d2;">{icon}</span>' if icon else "")
         labels_html += (
-            f'<div style="position:absolute;top:18px;left:{pct*100:.2f}%;transform:{tx};'
-            f'display:flex;flex-direction:column;align-items:{align};gap:2px;">'
+            f'<div style="position:absolute;top:{LBL_TOP}px;left:{pct*100:.2f}%;transform:{tx};' 
+            f'display:flex;flex-direction:column;align-items:{align};gap:2px;">' 
             f'{icon_s}'
-            f'<span style="font-size:10px;color:{color};font-weight:{weight};'
+            f'<span style="font-size:10px;color:{color};font-weight:{weight};' 
             f'white-space:nowrap;">{lbl}</span>'
             f'<span style="font-size:9px;color:#554f6a;white-space:nowrap;">{time_s}</span>'
             f'</div>'
         )
 
-    # ── bar gradient anchored to actual phase positions ──────
-    cp = _pct(times["civil_end_h"])    * 100
-    np = _pct(times["nautical_end_h"]) * 100
-    ap = _pct(times["astro_dark_h"])   * 100
-    gradient = (
-        f"rgba(224,130,64,.20) 0%,"
-        f"rgba(80,96,192,.38) {cp:.1f}%,"
-        f"rgba(10,10,40,.88) {np:.1f}%,"
-        f"rgba(5,5,20,.97) {ap:.1f}%,"
-        f"rgba(5,5,20,.97) {100-ap:.1f}%,"
-        f"rgba(10,10,40,.88) {100-np:.1f}%,"
-        f"rgba(80,96,192,.38) {100-cp:.1f}%,"
-        f"rgba(224,130,64,.20) 100%"
+    # ── cursor: NOW text → line → dot, all above the bar ─────────
+    # Cursor flex column (top→bottom): text(~12px) gap(2) line(8px) gap(2) dot(8px)
+    # Dot top = 12+2+8+2 = 24px from cursor top
+    # Cursor top = BAR_TOP - 24 = 32-24 = 8px  →  dot top = 8+24 = 32 = BAR_TOP ✓
+    cursor_html = (
+        f'<div id="nd-now-cursor" style="position:absolute;top:8px;' 
+        f'left:{now_pct*100:.2f}%;visibility:{vis};' 
+        f'transform:translateX(-50%);' 
+        f'display:flex;flex-direction:column;align-items:center;gap:2px;">' 
+        '<span style="font-size:9px;color:#c478d2;font-weight:700;white-space:nowrap;">NOW</span>'
+        '<div style="width:1px;height:8px;background:linear-gradient(transparent,#c478d2);"></div>'
+        '<div style="width:8px;height:8px;border-radius:50%;background:#c478d2;' 
+        'border:1.5px solid #090614;animation:nd-glow 2s ease-in-out infinite;"></div>'
+        '</div>'
     )
 
-    # ── JS: reposition every 60 s; hide outside window ───────
+    # ── JS: update every 60 s; hide outside window ───────────────
     js = (
-        f'<script>(function(){{'
-        f'var T0={t_start:.4f},T1={t_end:.4f};'
-        f'function upd(){{'
-        f'var el=document.getElementById("nd-now-cursor");if(!el)return;'
-        f'var d=new Date(),'
-        f'h=d.getHours()+d.getMinutes()/60+d.getSeconds()/3600;'
-        f'var a=h>=T0?h:h+24;'
-        f'if(a<T0||a>T1){{el.style.visibility="hidden";return;}}'
-        f'el.style.visibility="visible";'
-        f'el.style.left=((a-T0)/(T1-T0)*100)+"%";'
+        f'<script>(function(){{' 
+        f'var T0={t_start:.4f},T1={t_end:.4f};' 
+        f'function upd(){{' 
+        f'var el=document.getElementById("nd-now-cursor");if(!el)return;' 
+        f'var d=new Date(),h=d.getHours()+d.getMinutes()/60+d.getSeconds()/3600;' 
+        f'var a=h>=T0?h:h+24;' 
+        f'if(a<T0||a>T1){{el.style.visibility="hidden";return;}}' 
+        f'el.style.visibility="visible";' 
+        f'el.style.left=((a-T0)/(T1-T0)*100)+"%";' 
         f'}}upd();setInterval(upd,60000);}})();</script>'
     )
 
-    vis = "visible" if in_win else "hidden"
-
+    CONTAINER_H = LBL_TOP + 44   # 44 px for label text + time
     return (
-        '<style>'
-        '@keyframes nd-glow{'
-        '0%,100%{box-shadow:0 0 0 2px rgba(196,120,210,0),0 0 10px #c478d2;}'
-        '50%{box-shadow:0 0 0 4px rgba(196,120,210,.22),0 0 20px #c478d2;}}'
-        '</style>'
-        '<div class="section-card">'
-        '<span class="section-label">Tonight\'s Sky Timeline</span>'
-        '<div style="position:relative;padding-top:44px;padding-bottom:56px;">'
-        f'<div style="height:10px;border-radius:99px;'
-        f'background:linear-gradient(to right,{gradient});'
-        f'border:1px solid rgba(196,120,210,.14);"></div>'
-        f'<div style="position:absolute;top:0;left:0;right:0;height:10px;">'
-        f'{ticks_html}</div>'
-        f'{labels_html}'
-        f'<div id="nd-now-cursor" style="position:absolute;top:-44px;'
-        f'left:{now_pct*100:.2f}%;visibility:{vis};'
-        f'transform:translateX(-50%);'
-        f'display:flex;flex-direction:column;align-items:center;gap:2px;">'
-        '<span style="font-size:9px;color:#c478d2;font-weight:700;'
-        'white-space:nowrap;">NOW</span>'
-        '<div style="width:1px;height:22px;'
-        'background:linear-gradient(transparent,#c478d2);"></div>'
-        '<div style="width:14px;height:14px;border-radius:50%;background:#c478d2;'
-        'border:2px solid #090614;animation:nd-glow 2s ease-in-out infinite;"></div>'
-        '</div>'
-        '</div>'
+        '<style>' 
+        '@keyframes nd-glow{' 
+        '0%,100%{box-shadow:0 0 0 2px rgba(196,120,210,0),0 0 6px #c478d2;}' 
+        '50%{box-shadow:0 0 0 3px rgba(196,120,210,.22),0 0 14px #c478d2;}}' 
+        '</style>' 
+        '<div class="section-card">' 
+        '<span class="section-label">Tonight\'s Sky Timeline</span>' 
+        f'<div style="position:relative;height:{CONTAINER_H}px;margin-top:8px;">' 
+        f'<div style="position:absolute;top:{BAR_TOP}px;left:0;right:0;height:{BAR_H}px;' 
+        f'border-radius:99px;' 
+        f'background:linear-gradient(to right,{gradient});' 
+        f'border:1px solid rgba(196,120,210,.14);"></div>' 
+        f'{ticks_html}' 
+        f'{labels_html}' 
+        f'{cursor_html}' 
+        '</div>' 
         '</div>'
         + js
     )

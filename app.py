@@ -41,6 +41,7 @@ try:
         None,
     )
     TRAVEL_PLAN_SCORE_THRESHOLD = getattr(backend_module, "TRAVEL_PLAN_SCORE_THRESHOLD", 70.0)
+    fetch_tonight_sky_times = backend_module.fetch_tonight_sky_times
 
     BACKEND_IMPORT_ERROR = None
     HAS_RAG_BACKEND = generate_rag_recommendation is not None
@@ -3105,23 +3106,50 @@ def _sky_clock_card_html(city_name: str = "New York City") -> str:
     )
 
 
-def _night_timeline_card_html() -> str:
-    """Dusk-to-dawn phase bar with animated NOW cursor."""
+@st.cache_data(ttl=3600)
+def _cached_sky_times(lat: float, lon: float) -> dict:
+    return fetch_tonight_sky_times(lat, lon) or {}
+
+
+def _night_timeline_card_html(lat: float, lon: float) -> str:
+    """Dusk-to-dawn phase bar with JS-driven live NOW cursor."""
+    _FALLBACK = {
+        "sunset_h":       19 + 42/60,
+        "civil_end_h":    20 +  9/60,
+        "nautical_end_h": 20 + 38/60,
+        "astro_dark_h":   21 + 11/60,
+        "dawn_h":         24 +  5 +  2/60,
+    }
+    sky = _cached_sky_times(lat, lon) if lat is not None and lon is not None else {}
+    times = {k: sky.get(k, _FALLBACK[k]) for k in _FALLBACK}
+
+    t_start = times["sunset_h"]
+    t_end   = times["dawn_h"]
+
+    def _fmt(h: float) -> str:
+        h_mod = h % 24
+        suffix = "am" if h_mod < 12 else "pm"
+        h12 = h_mod % 12 or 12
+        m = round((h12 % 1) * 60)
+        h12 = int(h12)
+        return f"{h12}:{m:02d} {suffix}"
+
+    # Initial server-side position so cursor renders correctly on first paint.
     now    = datetime.now()
     hour_f = now.hour + now.minute / 60.0
-
-    t_start = 19.7
-    t_end   = 29.03
-    adj_h   = hour_f if hour_f >= t_start else hour_f + 24
+    adj_h  = hour_f if hour_f >= t_start else hour_f + 24
     now_pct = max(0.02, min(0.97, (adj_h - t_start) / (t_end - t_start)))
 
+    _phase_hours = [
+        ("☀",  "Sunset",     _fmt(times["sunset_h"]),       times["sunset_h"]),
+        (None, "Civil",      _fmt(times["civil_end_h"]),     times["civil_end_h"]),
+        (None, "Nautical",   _fmt(times["nautical_end_h"]),  times["nautical_end_h"]),
+        ("★",  "Astro Dark", _fmt(times["astro_dark_h"]),    times["astro_dark_h"]),
+        (None, "Dawn",       _fmt(times["dawn_h"]),          times["dawn_h"]),
+    ]
     phases = [
-        ("☀",  "Sunset",      "7:42 pm", 0.00),
-        (None, "Civil",       "8:09 pm", 0.12),
-        (None, "Nautical",    "8:38 pm", 0.22),
-        ("★",  "Astro Dark",  "9:11 pm", 0.33),
-        ("◎",  "Best Window", "10–11 pm",0.50),
-        (None, "Dawn",        "5:02 am", 1.00),
+        (icon, label, time_s, (h - t_start) / (t_end - t_start))
+        for icon, label, time_s, h in _phase_hours
     ]
 
     ticks_html = "".join(
@@ -3130,19 +3158,39 @@ def _night_timeline_card_html() -> str:
         for p in phases
     )
 
+    # Key phases always get full labels; secondary phases only if ≥12% away from every key phase.
+    KEY_PHASES  = {"Sunset", "Astro Dark", "Dawn"}
+    MIN_GAP     = 0.12
+    key_pcts    = {lbl: pct for _, lbl, _, pct in phases if lbl in KEY_PHASES}
+
     labels_html = ""
-    for i, p in enumerate(phases):
-        icon, label, time_s, pct = p
-        align     = "flex-end" if i == len(phases) - 1 else "center"
-        transform = "translateX(0%)" if i == len(phases) - 1 else "translateX(-50%)"
-        lbl_color = "#e4dff0" if icon else "#8880a0"
-        lbl_weight= "600" if icon else "400"
-        icon_html = (
+    n = len(phases)
+    for i, (icon, label, time_s, pct) in enumerate(phases):
+        if i == 0:
+            transform = "translateX(0%)"
+            align     = "flex-start"
+        elif i == n - 1:
+            transform = "translateX(-100%)"
+            align     = "flex-end"
+        else:
+            transform = "translateX(-50%)"
+            align     = "center"
+
+        is_key     = label in KEY_PHASES
+        has_space  = all(abs(pct - kp) >= MIN_GAP for kp in key_pcts.values())
+        show_label = is_key or has_space
+
+        if not show_label:
+            continue
+
+        lbl_color  = "#e4dff0" if icon else "#8880a0"
+        lbl_weight = "600"     if icon else "400"
+        icon_html  = (
             f'<span style="font-size:10px;color:#c478d2;margin-bottom:1px;">{icon}</span>'
             if icon else ""
         )
         labels_html += (
-            f'<div style="position:absolute;left:{pct*100:.1f}%;transform:{transform};'
+            f'<div style="position:absolute;top:18px;left:{pct*100:.1f}%;transform:{transform};'
             f'display:flex;flex-direction:column;align-items:{align};gap:1px;">'
             f'{icon_html}'
             f'<span style="font-size:10px;color:{lbl_color};font-weight:{lbl_weight};'
@@ -3150,6 +3198,24 @@ def _night_timeline_card_html() -> str:
             f'<span style="font-size:9px;color:#554f6a;white-space:nowrap;">{time_s}</span>'
             f'</div>'
         )
+
+    js = (
+        '<script>'
+        '(function(){'
+        f'var T0={t_start},T1={t_end};'
+        'function upd(){'
+        'var el=document.getElementById("nd-now-cursor");'
+        'if(!el)return;'
+        'var d=new Date(),h=d.getHours()+d.getMinutes()/60+d.getSeconds()/3600;'
+        'var a=h>=T0?h:h+24;'
+        'var p=Math.max(0.02,Math.min(0.97,(a-T0)/(T1-T0)));'
+        'el.style.left=p*100+"%";'
+        '}'
+        'upd();'
+        'setInterval(upd,60000);'
+        '})();'
+        '</script>'
+    )
 
     return (
         '<style>'
@@ -3160,7 +3226,7 @@ def _night_timeline_card_html() -> str:
         '</style>'
         '<div class="section-card">'
         '<span class="section-label">Tonight\'s Sky Timeline</span>'
-        '<div style="position:relative;margin-bottom:34px;">'
+        '<div style="position:relative;padding-bottom:56px;">'
         '<div style="height:10px;border-radius:99px;'
         'background:linear-gradient(to right,'
         'rgba(224,130,64,0.20) 0%,rgba(80,96,192,0.38) 12%,'
@@ -3168,11 +3234,9 @@ def _night_timeline_card_html() -> str:
         'rgba(10,10,40,0.88) 75%,rgba(80,96,192,0.38) 88%,'
         'rgba(224,130,64,0.20) 100%);'
         'border:1px solid rgba(196,120,210,0.14);"></div>'
-        '<div style="position:absolute;top:0;left:48%;width:14%;height:100%;'
-        'border-radius:99px;background:rgba(196,120,210,0.20);'
-        'border:1px solid rgba(196,120,210,0.38);"></div>'
-        f'<div style="position:absolute;inset:0;">{ticks_html}</div>'
-        f'<div style="position:absolute;top:-6px;left:{now_pct*100:.1f}%;'
+        f'<div style="position:absolute;top:0;left:0;right:0;height:10px;">{ticks_html}</div>'
+        f'{labels_html}'
+        f'<div id="nd-now-cursor" style="position:absolute;top:-6px;left:{now_pct*100:.1f}%;'
         'transform:translateX(-50%);'
         'display:flex;flex-direction:column;align-items:center;gap:2px;">'
         '<div style="width:14px;height:14px;border-radius:50%;'
@@ -3184,8 +3248,8 @@ def _night_timeline_card_html() -> str:
         'white-space:nowrap;margin-top:-2px;">NOW</span>'
         '</div>'
         '</div>'
-        f'<div style="position:relative;height:48px;">{labels_html}</div>'
         '</div>'
+        + js
     )
 
 
@@ -3422,11 +3486,18 @@ if "pipeline_result" not in st.session_state:
                 st.error("The pipeline failed.")
                 st.exception(e)
     
+    # Resolve lat/lon for city-preset mode (where lat/lon are None)
+    _tl_lat, _tl_lon = lat, lon
+    if _tl_lat is None or _tl_lon is None:
+        _coords = CITY_PRESETS.get(city_name)
+        if _coords:
+            _tl_lat, _tl_lon = _coords[0], _coords[1]
+
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown(_sky_clock_card_html(city_name), unsafe_allow_html=True)
     with col_b:
-        st.markdown(_night_timeline_card_html(), unsafe_allow_html=True)
+        st.markdown(_night_timeline_card_html(_tl_lat, _tl_lon), unsafe_allow_html=True)
     st.stop()
 
 

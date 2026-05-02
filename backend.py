@@ -815,6 +815,75 @@ def fetch_ipgeo_astronomy(
     return ip_geo_df.sort_values("date").reset_index(drop=True)
 
 
+def fetch_tonight_sky_times(lat: float, lon: float) -> Optional[dict]:
+    """
+    Return twilight hours for tonight's timeline widget.
+
+    Evening fields come from today's date (or yesterday if it's pre-noon).
+    Dawn comes from the following morning so the full dusk-to-dawn arc is covered.
+    All hours > 24 indicate next-day times (e.g. 28.15 = 04:09 AM tomorrow).
+    Returns None on any fetch or parse failure so callers can fall back gracefully.
+    """
+    if IPGEOLOC_API_KEY is None:
+        return None
+
+    now = datetime.now()
+    if now.hour < 12:
+        evening_date = (now - timedelta(days=1)).date()
+        dawn_date    = now.date()
+    else:
+        evening_date = now.date()
+        dawn_date    = (now + timedelta(days=1)).date()
+
+    def _parse(s: Optional[str]) -> Optional[float]:
+        if not s or s == "-":
+            return None
+        try:
+            h, m = s.split(":")
+            return int(h) + int(m) / 60.0
+        except Exception:
+            return None
+
+    url = "https://api.ipgeolocation.io/v3/astronomy/timeSeries"
+
+    def _fetch_day(d) -> Optional[dict]:
+        try:
+            params = {
+                "apiKey": IPGEOLOC_API_KEY,
+                "location": f"{lat},{lon}",
+                "dateStart": d.strftime("%Y-%m-%d"),
+                "dateEnd":   d.strftime("%Y-%m-%d"),
+            }
+            resp = requests.get(url, params=params, timeout=10)
+            resp.raise_for_status()
+            rows = resp.json().get("astronomy", [])
+            return rows[0] if rows else None
+        except Exception:
+            return None
+
+    eve  = _fetch_day(evening_date)
+    morn = _fetch_day(dawn_date)
+    if eve is None or morn is None:
+        return None
+
+    sunset_h       = _parse(eve.get("sunset"))
+    civil_end_h    = _parse(eve.get("evening", {}).get("civil_twilight_end"))
+    nautical_end_h = _parse(eve.get("evening", {}).get("nautical_twilight_end"))
+    astro_dark_h   = _parse(eve.get("evening", {}).get("astronomical_twilight_end"))
+    dawn_raw_h     = _parse(morn.get("morning", {}).get("astronomical_twilight_begin"))
+
+    if any(v is None for v in [sunset_h, civil_end_h, nautical_end_h, astro_dark_h, dawn_raw_h]):
+        return None
+
+    return {
+        "sunset_h":       sunset_h,
+        "civil_end_h":    civil_end_h,
+        "nautical_end_h": nautical_end_h,
+        "astro_dark_h":   astro_dark_h,
+        "dawn_h":         dawn_raw_h + 24,
+    }
+
+
 def build_fallback_astronomy_df(
     start_date: Optional[datetime] = None,
     days: int = 4,

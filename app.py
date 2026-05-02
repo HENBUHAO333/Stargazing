@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 try:
     import pydeck as pdk
@@ -69,6 +70,33 @@ BROWSER_GEOLOCATION = components.declare_component(
 
 def browser_geolocation(key: str = "browser_geolocation"):
     return BROWSER_GEOLOCATION(key=key, default=None, height=72)
+
+
+COMMON_TIMEZONES = [
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Phoenix",
+    "America/Los_Angeles",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "America/Toronto",
+    "America/Vancouver",
+    "Europe/London",
+    "Europe/Paris",
+    "Asia/Shanghai",
+    "Asia/Tokyo",
+    "Australia/Sydney",
+]
+
+
+def is_valid_timezone(timezone_name: str) -> bool:
+    try:
+        ZoneInfo(str(timezone_name))
+        return True
+    except Exception:
+        return False
 
 
 # ============================================================
@@ -1172,7 +1200,7 @@ elif input_mode == "Custom latitude / longitude":
     city_name = st.sidebar.text_input("Location name", "Custom Location")
     lat      = st.sidebar.number_input("Latitude",  value=40.7128, format="%.6f")
     lon      = st.sidebar.number_input("Longitude", value=-74.0060, format="%.6f")
-    timezone = st.sidebar.text_input("Timezone", "America/New_York")
+    timezone = "America/New_York"
 else:
     with st.sidebar:
         geo_result = browser_geolocation()
@@ -1213,6 +1241,50 @@ else:
         st.sidebar.success(f"Detected: {city_name} ({lat:.4f}, {lon:.4f}){accuracy_text}")
     else:
         st.sidebar.info("Allow browser location access to use precise coordinates.")
+
+if timezone is None and input_mode == "City preset":
+    preset_coords = CITY_PRESETS.get(city_name)
+    if preset_coords:
+        timezone = preset_coords[2]
+
+location_default_timezone = timezone or "UTC"
+if not is_valid_timezone(location_default_timezone):
+    st.sidebar.warning(
+        f"Detected timezone `{location_default_timezone}` is not valid. Falling back to UTC."
+    )
+    location_default_timezone = "UTC"
+
+timezone_options = ["Use location default"] + COMMON_TIMEZONES + ["Custom timezone"]
+if location_default_timezone in COMMON_TIMEZONES:
+    default_timezone_index = timezone_options.index(location_default_timezone)
+else:
+    default_timezone_index = 0
+
+timezone_choice = st.sidebar.selectbox(
+    "Timezone",
+    timezone_options,
+    index=default_timezone_index,
+    help="Choose the local timezone used for forecast labels, moon/twilight timing, and charts.",
+)
+
+if timezone_choice == "Use location default":
+    timezone = location_default_timezone
+elif timezone_choice == "Custom timezone":
+    timezone = st.sidebar.text_input(
+        "Custom timezone",
+        value=location_default_timezone,
+        help="Use an IANA timezone like America/New_York or America/Los_Angeles.",
+    ).strip()
+else:
+    timezone = timezone_choice
+
+if not is_valid_timezone(timezone):
+    st.sidebar.error(
+        f"`{timezone}` is not a valid IANA timezone. Using `{location_default_timezone}` for this run."
+    )
+    timezone = location_default_timezone
+
+st.sidebar.caption(f"Using timezone: `{timezone}`")
 
 days = st.sidebar.slider("Forecast range", min_value=1, max_value=4, value=4)
 

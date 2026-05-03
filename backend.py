@@ -673,92 +673,29 @@ def fetch_weather_forecast_with_fallback(
     timezone: str = "UTC",
     days: int = 4,
 ) -> Tuple[pd.DataFrame, str]:
-    source = "Open-Meteo fallback"
-
+    # Keep active scoring sources stable: Astrospheric is primary and
+    # Open-Meteo is the only fallback. Meteoblue helpers remain available for
+    # future experiments, but are not mixed into score inputs by default.
     try:
         weather_df = fetch_astrospheric_forecast(lat, lon)
 
         if weather_df is not None and not weather_df.empty:
-            source = "Astrospheric"
-            weather_df, has_meteoblue = enrich_weather_with_meteoblue(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_meteoblue:
-                source = f"{source} + Meteoblue Validation"
+            return weather_df, "Astrospheric"
 
-            weather_df, has_air_quality = enrich_weather_with_air_quality(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_air_quality:
-                source = f"{source} + Open-Meteo Air Quality"
-
-            return weather_df, source
-
-        print("Astrospheric returned empty data. Falling back to Meteoblue/Open-Meteo.")
+        print("Astrospheric returned empty data. Falling back to Open-Meteo.")
 
     except Exception as e:
-        print(f"Astrospheric failed. Falling back to Meteoblue/Open-Meteo. Error: {e}")
+        print(f"Astrospheric failed. Falling back to Open-Meteo. Error: {e}")
 
-    try:
-        meteoblue_df = fetch_meteoblue_forecast(
+    return (
+        fetch_open_meteo_forecast(
             lat=lat,
             lon=lon,
             timezone=timezone,
             days=days,
-        )
-        if meteoblue_df is not None and not meteoblue_df.empty:
-            weather_df = build_weather_from_meteoblue(meteoblue_df)
-            source = "Meteoblue realtime"
-            weather_df, has_air_quality = enrich_weather_with_air_quality(
-                weather_df=weather_df,
-                lat=lat,
-                lon=lon,
-                timezone=timezone,
-                days=days,
-            )
-            if has_air_quality:
-                source = f"{source} + Open-Meteo Air Quality"
-            return weather_df, source
-
-    except Exception as e:
-        print(f"Meteoblue failed. Falling back to Open-Meteo. Error: {e}")
-
-    weather_df = fetch_open_meteo_forecast(
-        lat=lat,
-        lon=lon,
-        timezone=timezone,
-        days=days,
+        ),
+        "Open-Meteo fallback",
     )
-
-    weather_df, has_meteoblue = enrich_weather_with_meteoblue(
-        weather_df=weather_df,
-        lat=lat,
-        lon=lon,
-        timezone=timezone,
-        days=days,
-    )
-    if has_meteoblue:
-        source = f"{source} + Meteoblue Validation"
-
-    weather_df, has_air_quality = enrich_weather_with_air_quality(
-        weather_df=weather_df,
-        lat=lat,
-        lon=lon,
-        timezone=timezone,
-        days=days,
-    )
-    if has_air_quality:
-        source = f"{source} + Open-Meteo Air Quality"
-
-    return weather_df, source
 
 
 # ============================================================
@@ -1620,7 +1557,7 @@ def apply_position_features_to_master(
 
 
 # ============================================================
-# SCORING MODEL — VALIDATED SYNTHESIS VERSION
+# SCORING MODEL — NOTEBOOK UPDATED VERSION
 # ============================================================
 
 def classify_window(score: float) -> str:
@@ -1640,26 +1577,24 @@ def score_stargazing_windows(
     bortle_index: float = 5,
 ) -> pd.DataFrame:
     """
-    Deterministic synthesis model:
+    This follows the notebook's updated model:
 
-    1. Observability:
-       - smooth cloud transmission
-       - astronomical darkness gate
-       - baseline darkness/contrast
+    1. Visibility hard constraints:
+       - cloud penalty
+       - daylight penalty
 
-    2. View quality once observable:
+    2. Atmospheric quality:
        - transparency_norm
        - seeing_norm
        - humidity_quality
-       - optional aerosol/PM haze quality
 
     3. Darkness / contrast:
        - moon illumination
-       - hourly moon altitude when available, otherwise daily meridian fallback
+       - moon altitude factor
        - Bortle light pollution
 
     4. Final:
-       stargazing_score = geometric blend of observability and view quality
+       stargazing_score = 100 * visibility_penalty * base_stargazing_quality
     """
 
     if master_df is None or master_df.empty:
@@ -1675,12 +1610,6 @@ def score_stargazing_windows(
         "temperature_value",
         "moon_illuminated_pct",
         "moon_meridian_altitude",
-        "moon_hourly_altitude",
-        "moon_hourly_illuminated_pct",
-        "aerosol_optical_depth",
-        "pm2_5",
-        "dust",
-        "fallback_weather_proxy",
     ]
 
     for col in numeric_cols:
@@ -1724,22 +1653,28 @@ def score_stargazing_windows(
     score_df["moon_meridian_altitude"] = score_df["moon_meridian_altitude"].fillna(0)
 
     # ========================================================
-    # Stage 1: Observability Gate
+    # Stage 1: Visibility Hard Constraints
     # ========================================================
 
-    cloud_fraction = score_df["cloud_value"].clip(0, 100) / 100.0
+    def visibility_penalty(row):
+        penalty = 1.0
 
-    # Smooth extinction curve: avoids discontinuities at 40/60/80% cloud.
-    score_df["cloud_transmission"] = np.exp(
-        -2.8 * np.power(cloud_fraction, 1.6)
-    ).clip(0.03, 1.0)
+        if row["cloud_value"] >= 80:
+            penalty = 0.05
+        elif row["cloud_value"] >= 60:
+            penalty = 0.25
+        elif row["cloud_value"] >= 40:
+            penalty = 0.55
 
-    score_df["darkness_gate"] = np.where(score_df["is_dark_enough"], 1.0, 0.08)
+        if not bool(row["is_dark_enough"]):
+            penalty *= 0.05
 
-    # Backward-compatible field name used by existing charts.
-    score_df["visibility_penalty"] = (
-        score_df["cloud_transmission"] * score_df["darkness_gate"]
-    ).clip(0, 1)
+        return penalty
+
+    score_df["visibility_penalty"] = score_df.apply(
+        visibility_penalty,
+        axis=1,
+    )
 
     # ========================================================
     # Stage 2: Astrospheric Quality — notebook updated version
@@ -1785,33 +1720,11 @@ def score_stargazing_windows(
         / (ABS_DEW_GOOD - ABS_DEW_BAD)
     )
 
-    aod = score_df["aerosol_optical_depth"]
-    pm25 = score_df["pm2_5"]
-
-    aod_quality = 1 - ((aod.clip(0.02, 0.50) - 0.02) / (0.50 - 0.02))
-    pm25_quality = 1 - ((pm25.clip(0, 35) - 0) / 35)
-    score_df["haze_quality"] = pd.concat(
-        [aod_quality, pm25_quality],
-        axis=1,
-    ).mean(axis=1, skipna=True)
-    score_df["haze_quality"] = score_df["haze_quality"].fillna(0.65).clip(0, 1)
-
     score_df["atmospheric_score"] = (
-        0.40 * score_df["transparency_norm"]
-        + 0.30 * score_df["seeing_norm"]
-        + 0.15 * score_df["humidity_quality"]
-        + 0.15 * score_df["haze_quality"]
+        0.45 * score_df["transparency_norm"]
+        + 0.35 * score_df["seeing_norm"]
+        + 0.20 * score_df["humidity_quality"]
     )
-
-    fallback_proxy = (
-        score_df.get("fallback_weather_proxy", False)
-        .astype("boolean")
-        .fillna(False)
-    )
-    score_df["weather_proxy_quality"] = np.where(fallback_proxy, 0.88, 1.0)
-    score_df["atmospheric_score"] = (
-        score_df["atmospheric_score"] * score_df["weather_proxy_quality"]
-    ).clip(0, 1)
 
     # ========================================================
     # Stage 3: Darkness / Contrast Model
@@ -1839,41 +1752,21 @@ def score_stargazing_windows(
     ).clip(0, 1)
 
     # ========================================================
-    # Final Composite Score — validated synthesis version
+    # Final Composite Score — notebook updated version
     # ========================================================
 
-    score_df["observability_score"] = (
-        100
-        * score_df["darkness_gate"]
-        * score_df["cloud_transmission"]
-        * (0.70 + 0.30 * score_df["effective_darkness"])
-    ).clip(0, 100)
-
-    score_df["view_quality_score"] = (
-        100
-        * (
-            0.52 * score_df["atmospheric_score"]
-            + 0.48 * score_df["effective_darkness"]
-        )
-    ).clip(0, 100)
-
-    # Geometric blending keeps either a bad gate or bad quality from being
-    # hidden by the other component, while preserving useful spread at night.
-    score_df["stargazing_score"] = (
-        100
-        * np.power(score_df["observability_score"] / 100.0, 0.62)
-        * np.power(score_df["view_quality_score"] / 100.0, 0.38)
+    base_stargazing_quality = (
+        0.65 * score_df["atmospheric_score"]
+        + 0.35 * score_df["effective_darkness"]
     )
 
-    # Keep the notebook-era product for diagnostics and migration comparison.
-    score_df["legacy_stargazing_score"] = (
+    score_df["stargazing_score"] = (
         100
-        * score_df["visibility_penalty"]
         * (
-            0.65 * score_df["atmospheric_score"]
-            + 0.35 * score_df["effective_darkness"]
+            score_df["visibility_penalty"]
+            * base_stargazing_quality
         )
-    ).clip(0, 100)
+    )
 
     score_df["stargazing_score"] = score_df["stargazing_score"].clip(0, 100)
 
@@ -3409,28 +3302,20 @@ def _build_telemetry_report(
             "cluster_counts": cluster_counts,
         },
         "scoring_model": {
-            "observability": {
-                "cloud_transmission": "exp(-2.8 * (cloud_cover_fraction ** 1.6))",
-                "darkness_gate": {
-                    "dark_enough": 1.0,
-                    "daylight_or_twilight": 0.08,
-                },
-                "formula": "100 * darkness_gate * cloud_transmission * (0.70 + 0.30 * effective_darkness)",
+            "visibility_penalty": {
+                "cloud_ge_80": 0.05,
+                "cloud_ge_60": 0.25,
+                "cloud_ge_40": 0.55,
+                "daylight_multiplier_if_not_dark": 0.05,
             },
             "atmospheric_weights": {
-                "transparency_norm": 0.40,
-                "seeing_norm": 0.30,
-                "humidity_quality": 0.15,
-                "haze_quality": 0.15,
+                "transparency_norm": 0.45,
+                "seeing_norm": 0.35,
+                "humidity_quality": 0.20,
             },
-            "view_quality": {
-                "atmospheric_score": 0.52,
-                "effective_darkness": 0.48,
-                "formula": "100 * (0.52 * atmospheric_score + 0.48 * effective_darkness)",
-            },
-            "final_synthesis": {
-                "formula": "100 * (observability_score / 100)^0.62 * (view_quality_score / 100)^0.38",
-                "legacy_score_column": "legacy_stargazing_score",
+            "final_weights": {
+                "atmospheric_score": 0.65,
+                "effective_darkness": 0.35,
             },
             "recommendation_thresholds": {
                 "excellent": ">= 85",

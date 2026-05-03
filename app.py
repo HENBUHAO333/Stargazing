@@ -1,3 +1,4 @@
+
 import json
 import math
 import random
@@ -1988,8 +1989,6 @@ def build_factor_chart(score_df):
     factor_cols = [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
         "effective_darkness","atmospheric_score","visibility_penalty",
-        "cloud_transmission","haze_quality","observability_score","view_quality_score",
-        "meteoblue_cloud_value","meteoblue_transparency_value","meteoblue_seeing_proxy_value",
     ]
     existing_cols = [c for c in factor_cols if c in score_df.columns]
     plot_df = score_df.copy()
@@ -2074,38 +2073,14 @@ def build_score_validation_frame(score_df: pd.DataFrame) -> pd.DataFrame:
         if col in validation_df.columns:
             validation_df[col] = pd.to_numeric(validation_df[col], errors="coerce")
 
-    if {"observability_score", "view_quality_score"}.issubset(validation_df.columns):
-        validation_df["expected_score"] = (
-            100
-            * np.power(validation_df["observability_score"] / 100.0, 0.62)
-            * np.power(validation_df["view_quality_score"] / 100.0, 0.38)
-        ).clip(0, 100)
-    else:
-        validation_df["expected_score"] = (
-            100
-            * validation_df["visibility_penalty"]
-            * (
-                0.65 * validation_df["atmospheric_score"]
-                + 0.35 * validation_df["effective_darkness"]
-            )
-        ).clip(0, 100)
-
-    if {"atmospheric_score", "effective_darkness"}.issubset(validation_df.columns):
-        validation_df["expected_view_quality_score"] = (
-            100
-            * (
-                0.52 * validation_df["atmospheric_score"]
-                + 0.48 * validation_df["effective_darkness"]
-            )
-        ).clip(0, 100)
-
-    if {"darkness_gate", "cloud_transmission", "effective_darkness"}.issubset(validation_df.columns):
-        validation_df["expected_observability_score"] = (
-            100
-            * validation_df["darkness_gate"]
-            * validation_df["cloud_transmission"]
-            * (0.70 + 0.30 * validation_df["effective_darkness"])
-        ).clip(0, 100)
+    validation_df["expected_score"] = (
+        100
+        * validation_df["visibility_penalty"]
+        * (
+            0.65 * validation_df["atmospheric_score"]
+            + 0.35 * validation_df["effective_darkness"]
+        )
+    ).clip(0, 100)
 
     validation_df["score_residual"] = (
         validation_df["stargazing_score"] - validation_df["expected_score"]
@@ -2163,28 +2138,11 @@ def build_bortle_sensitivity_frame(validation_df: pd.DataFrame) -> pd.DataFrame:
             base_darkness
             - source["moon_brightness_penalty"] * (1 - light_pollution_factor)
         ).clip(0, 1)
-        if {"darkness_gate", "cloud_transmission"}.issubset(source.columns):
-            observability_score = (
-                100
-                * source["darkness_gate"]
-                * source["cloud_transmission"]
-                * (0.70 + 0.30 * effective_darkness)
-            ).clip(0, 100)
-            view_quality_score = (
-                100
-                * (0.52 * source["atmospheric_score"] + 0.48 * effective_darkness)
-            ).clip(0, 100)
-            simulated_score = (
-                100
-                * np.power(observability_score / 100.0, 0.62)
-                * np.power(view_quality_score / 100.0, 0.38)
-            ).clip(0, 100)
-        else:
-            simulated_score = (
-                100
-                * source["visibility_penalty"]
-                * (0.65 * source["atmospheric_score"] + 0.35 * effective_darkness)
-            ).clip(0, 100)
+        simulated_score = (
+            100
+            * source["visibility_penalty"]
+            * (0.65 * source["atmospheric_score"] + 0.35 * effective_darkness)
+        ).clip(0, 100)
         rows.append(
             {
                 "bortle_index": bortle,
@@ -2237,9 +2195,9 @@ def render_audit_cards(audit_df: pd.DataFrame):
 def render_validation_source_cards():
     sources = [
         {
-            "source": "Open-Meteo Air Quality",
+            "source": "Open-Meteo Air Quality (future optional)",
             "use": "Aerosol optical depth, PM2.5, and dust validate haze/transparency.",
-            "integration": "Implemented as no-key enrichment when weather is fetched.",
+            "integration": "Disabled in the default scoring path to keep the source logic simple.",
         },
         {
             "source": "Timeanddate Astro Position",
@@ -2247,9 +2205,9 @@ def render_validation_source_cards():
             "integration": "Used for moonlight penalty when position data is enabled.",
         },
         {
-            "source": "Meteoblue Astronomy Seeing",
+            "source": "Meteoblue Astronomy Seeing (future optional)",
             "use": "Independent seeing indices, cloud layers, and jet stream context.",
-            "integration": "Best paid/API candidate to replace fallback seeing placeholders.",
+            "integration": "Not used by default; keep as a future calibration candidate only.",
         },
         {
             "source": "Skyfield or Astropy",
@@ -2286,7 +2244,7 @@ def render_external_verification_recipe():
     st.markdown(
         """
         1. Collect observations for the app's top 1-3 windows: user rating, visible limiting magnitude, SQM reading if available, and whether the Milky Way or common constellations were visible.
-        2. Store the matching forecast row: score, observability, view quality, cloud cover, haze, Moon altitude, Moon illumination, and Bortle/sky brightness.
+        2. Store the matching forecast row: score, visibility penalty, atmospheric score, effective darkness, cloud cover, Moon altitude, Moon illumination, and Bortle/sky brightness.
         3. Compare forecast score to observed outcome using correlation, calibration curves, and confusion matrices for labels such as No-Go/Poor/Marginal/Good.
         4. Fit weights on historical observations, then keep a blind validation set so the model is not graded on the same data used to tune it.
         5. Display confidence separately from score: high confidence requires real seeing/transparency, hourly Moon geometry, low missingness, and observed calibration coverage near that location.
@@ -2357,19 +2315,6 @@ def build_score_credibility_audit(
         validation_df["transparency_value"].std()
         if "transparency_value" in validation_df.columns else 0.0
     )
-    has_meteoblue = "Meteoblue" in weather_source or (
-        "meteoblue_cloud_value" in validation_df.columns
-        and validation_df["meteoblue_cloud_value"].notna().any()
-    )
-    cloud_delta_mean = (
-        validation_df["cloud_model_delta"].mean()
-        if "cloud_model_delta" in validation_df.columns else None
-    )
-    transparency_delta_mean = (
-        validation_df["transparency_model_delta"].mean()
-        if "transparency_model_delta" in validation_df.columns else None
-    )
-
     credibility = 82.0
     issues = [
         "No observed SQM, limiting-magnitude, user-rating, or astrophotography outcome dataset is connected yet, so this is not externally calibrated."
@@ -2383,12 +2328,6 @@ def build_score_credibility_audit(
     elif weather_source == "Unknown":
         credibility -= 18
         issues.append("Weather source is unknown.")
-
-    if has_meteoblue:
-        credibility += 6
-    else:
-        credibility -= 10
-        issues.append("Meteoblue realtime validation is not available for this run.")
 
     if missing_share > 0.10:
         credibility -= 20
@@ -2440,14 +2379,9 @@ def build_score_credibility_audit(
             f"Weather source: {weather_source}.",
         ),
         _quality_flag(
-            "Meteoblue realtime validation",
-            "Good" if has_meteoblue else "Watch",
-            (
-                "Meteoblue cloud/visibility/stability fields are merged into this run. "
-                f"Mean cloud model delta: {cloud_delta_mean:.1f}; mean transparency delta: {transparency_delta_mean:.2f}."
-                if has_meteoblue and cloud_delta_mean is not None and transparency_delta_mean is not None
-                else "No Meteoblue Validation fields were available in this run."
-            ),
+            "Weather fallback simplicity",
+            "Good",
+            "Meteoblue validation is disabled by default; the active path is Astrospheric first, then Open-Meteo fallback.",
         ),
         _quality_flag(
             "Astronomy input credibility",
@@ -2516,9 +2450,9 @@ def render_score_improvement_guidance(validation_df: pd.DataFrame, credibility_i
         - Separate forecast-hour scoring from recommendation scoring: rank only dark-enough rows by default, and show daytime rows as suppressed context.
         - Continue replacing fallback seeing/transparency placeholders with astronomy-weather inputs where available, and display lower confidence when using Open-Meteo.
         - Prefer hourly Moon altitude from the position feed for moonlight penalty; fall back to daily meridian altitude only when hourly positions are unavailable.
-        - Use smooth cloud transmission instead of hard cloud thresholds so 39% and 41% cloud cover behave similarly.
+        - Revisit cloud thresholds only after external calibration; the active score currently uses the original discrete cloud penalties.
         - Calibrate weights and thresholds against observed outcomes such as SQM, naked-eye limiting magnitude, user ratings, or archived clear-sky observations.
-        - Keep the score split into `observability` for whether the sky is usable and `view quality` for how good it is once usable.
+        - Keep the active formula simple enough to explain: visibility penalty times atmospheric/darkness quality.
         """
     )
 
@@ -2561,7 +2495,7 @@ def render_score_validation_panel(score_df: pd.DataFrame, bortle_index: int, res
     st.markdown(
         """
         The backend score is deterministic:
-        `100 * (observability_score / 100)^0.62 * (view_quality_score / 100)^0.38`.
+        `100 * visibility_penalty * (0.65 * atmospheric_score + 0.35 * effective_darkness)`.
         This panel recomputes that formula in the frontend, then separates formula consistency from
         real-world score credibility.
         """
@@ -3791,17 +3725,15 @@ with st.expander("Best Windows", expanded=_section_open("Best Windows")):
         orientation="h", color="recommendation",
         hover_data=[c for c in [
             "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-            "is_dark_enough","is_moon_up","visibility_penalty","cloud_transmission",
-            "effective_darkness","atmospheric_score","haze_quality",
-            "observability_score","view_quality_score",
+            "is_dark_enough","is_moon_up","visibility_penalty",
+            "effective_darkness","atmospheric_score",
         ] if c in top_windows.columns],
         title="Top 10 Stargazing Windows",
         labels=labels_for(
             "stargazing_score", "time_label", "recommendation", "cloud_value",
             "transparency_value", "seeing_value", "moon_illuminated_pct",
             "is_dark_enough", "is_moon_up", "visibility_penalty",
-            "cloud_transmission", "effective_darkness", "atmospheric_score",
-            "haze_quality", "observability_score", "view_quality_score",
+            "effective_darkness", "atmospheric_score",
         ),
     )
     fig_top.update_layout(xaxis_range=[0, 100])
@@ -3811,15 +3743,11 @@ with st.expander("Sky Conditions", expanded=_section_open("Sky Conditions")):
     st.plotly_chart(build_factor_chart(score_df), width="stretch")
     feature_options = [c for c in [
         "cloud_value","transparency_value","seeing_value","moon_illuminated_pct",
-        "visibility_penalty","cloud_transmission","darkness_gate",
-        "transparency_norm","seeing_norm","humidity_quality","haze_quality","weather_proxy_quality",
+        "visibility_penalty",
+        "transparency_norm","seeing_norm","humidity_quality",
         "moon_brightness_penalty","effective_darkness","atmospheric_score",
-        "observability_score","view_quality_score","legacy_stargazing_score","stargazing_score",
+        "stargazing_score",
         "aerosol_optical_depth","pm2_5","dust",
-        "meteoblue_cloud_value","meteoblue_low_clouds","meteoblue_mid_clouds",
-        "meteoblue_high_clouds","meteoblue_transparency_value",
-        "meteoblue_seeing_proxy_value","meteoblue_relativehumidity",
-        "meteoblue_fog_probability","cloud_model_delta","transparency_model_delta",
     ] if c in score_df.columns]
     if feature_options:
         feature_label_to_code = {human_label(c): c for c in feature_options}
@@ -4047,9 +3975,8 @@ if selected_page == "Methodology":
                 <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Data Sources</h3>
                 <ul class="muted">
                     <li>Primary astronomy-weather source: Astrospheric.</li>
-                    <li>Meteoblue Validation: realtime cloud, visibility, humidity, wind, and stability context. If Astrospheric is unavailable, Meteoblue can become the primary weather feed.</li>
-                    <li>Open-Meteo Air Quality: aerosol optical depth, PM2.5, and dust for haze validation.</li>
-                    <li>Open-Meteo weather fallback: cloud cover, visibility, temperature, dew point, and wind when higher-quality feeds are unavailable.</li>
+                    <li>Meteoblue Validation is disabled by default so it does not mix proxy fields into the stargazing score.</li>
+                    <li>Open-Meteo weather fallback: cloud cover, visibility, temperature, dew point, and wind when Astrospheric is unavailable.</li>
                     <li>Primary astronomy source: IPGeolocation for twilight, Moon phase, moonrise, and moonset.</li>
                     <li>Optional Timeanddate data: detailed Sun/Moon events and hourly Moon position. When enabled, hourly Moon altitude/illumination are used for moonlight scoring.</li>
                 </ul>
@@ -4057,33 +3984,24 @@ if selected_page == "Methodology":
             <div class="section-card">
                 <h3 class="section-heading" style="font-family: 'DM Serif Display', Georgia, serif; font-weight: 400; font-size:20px; color:#e4dff0; margin:0 0 8px 0;">Scoring Logic</h3>
                 <p class="muted">
-                    The final score is a 0-100 deterministic synthesis of two sub-scores:
-                    <b>observability_score</b>, which estimates whether the sky is practically usable,
-                    and <b>view_quality_score</b>, which estimates how good the view should be once
-                    the sky is usable.
+                    The final score is a 0-100 deterministic product of visibility constraints,
+                    atmospheric quality, and darkness/contrast quality.
                 </p>
                 <p class="muted">
-                    <b>Observability</b> starts with astronomical darkness and cloud cover.
-                    Daylight/twilight rows are strongly suppressed by a darkness gate. Cloud cover
-                    is converted through a smooth transmission curve instead of hard 40/60/80%
-                    cutoffs, so adjacent cloud percentages behave consistently. Observability also
-                    includes effective darkness, so dark-sky locations and low Moon interference
-                    improve the usable-window score.
+                    <b>Visibility penalty</b> starts at 1.0, then cloud cover applies discrete penalties:
+                    0.55 at 40% cloud, 0.25 at 60% cloud, and 0.05 at 80% cloud. If the row is not
+                    dark enough, the penalty is multiplied by 0.05.
                 </p>
                 <p class="muted">
-                    <b>View quality</b> blends atmospheric and contrast conditions. Atmospheric score
-                    is 40% transparency, 30% seeing or seeing proxy, 15% humidity/dew spread, and
-                    15% haze from aerosol/PM data when available. Effective darkness is reduced by
-                    Bortle light pollution and by Moon brightness when the Moon is above the horizon.
+                    <b>Atmospheric score</b> is 45% transparency, 35% seeing, and 20% humidity/dew spread.
+                    Effective darkness is reduced by Bortle light pollution and by Moon brightness when
+                    the Moon is above the horizon.
                     If hourly Moon position data is enabled, the Moon penalty uses hourly Moon altitude;
                     otherwise it falls back to Moon meridian altitude.
                 </p>
                 <p class="muted">
                     <b>Final formula:</b> stargazing_score = 100 ×
-                    (observability_score / 100)<sup>0.62</sup> ×
-                    (view_quality_score / 100)<sup>0.38</sup>.
-                    This geometric blend keeps bad observability or poor view quality from being hidden
-                    by the other component, while preserving ranking spread among viable nighttime hours.
+                    visibility_penalty × (0.65 × atmospheric_score + 0.35 × effective_darkness).
                 </p>
                 <p class="muted">
                     Recommendation labels are assigned after scoring:
@@ -4107,3 +4025,4 @@ if selected_page == "Methodology":
 if selected_page == "Telemetry":
     with st.expander("Telemetry", expanded=True):
         render_telemetry_console(telemetry)
+
